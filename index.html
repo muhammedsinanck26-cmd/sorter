@@ -1,0 +1,1573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AGRI-VISION SCADA — Hybrid Seed Separator Digital Twin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,600;0,700;0,800;1,400&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-base: #07090e;
+      --bg-surface: #0e131f;
+      --bg-card: #141b2d;
+      --bg-card-inner: #0a0e17;
+      --border: #232d42;
+      --border-bright: #3b4866;
+      --cyan: #00f2fe;
+      --cyan-glow: rgba(0, 242, 254, 0.2);
+      --pepper: #ef4444;
+      --pepper-glow: rgba(239, 68, 68, 0.25);
+      --papaya: #f59e0b;
+      --papaya-glow: rgba(245, 158, 11, 0.25);
+      --emerald: #10b981;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background: var(--bg-base);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* 1. Telemetry Header */
+    header {
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .brand-wrap {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .brand-logo {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, var(--cyan), #4facfe);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 15px var(--cyan-glow);
+    }
+    .brand-title {
+      font-size: 1.15rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+    .brand-subtitle {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .telemetry-badges {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .t-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      font-weight: 600;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+    }
+    .pulse-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--emerald);
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+
+    /* Layout Grids */
+    main {
+      padding: 20px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      max-width: 1500px;
+      width: 100%;
+      margin: 0 auto;
+    }
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: 1fr 1.1fr 0.9fr;
+      gap: 20px;
+    }
+    @media (max-width: 1100px) {
+      .dashboard-grid { grid-template-columns: 1fr; }
+    }
+
+    .card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+    }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 10px;
+    }
+    .card-title {
+      font-size: 0.95rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text);
+    }
+
+    /* Optical Chamber (Camera) */
+    .viewport-wrapper {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1/1;
+      max-width: 380px;
+      margin: 0 auto 16px auto;
+      border-radius: 14px;
+      overflow: hidden;
+      background: #000;
+      border: 2px solid var(--border-bright);
+    }
+    #webcam-canvas-container canvas, #webcam-canvas-container img {
+      width: 100% !important;
+      height: 100% !important;
+      object-fit: cover;
+    }
+    #webcam-canvas-container canvas { transform: scaleX(-1); }
+
+    /* Target Reticle & Scanline */
+    .hud-reticle {
+      position: absolute;
+      inset: 20px;
+      border: 1px dashed rgba(0, 242, 254, 0.4);
+      border-radius: 10px;
+      pointer-events: none;
+      transition: all 0.25s ease;
+    }
+    .hud-reticle.reticle-active {
+      border: 2px solid var(--emerald) !important;
+      box-shadow: inset 0 0 16px rgba(34, 197, 94, 0.35), 0 0 16px rgba(34, 197, 94, 0.4);
+    }
+    .hud-reticle::before, .hud-reticle::after {
+      content: '';
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      border-color: var(--cyan);
+      border-style: solid;
+      transition: border-color 0.25s ease;
+    }
+    .hud-reticle.reticle-active::before, .hud-reticle.reticle-active::after {
+      border-color: var(--emerald) !important;
+    }
+    .hud-reticle::before { top: -2px; left: -2px; border-width: 3px 0 0 3px; }
+    .hud-reticle::after { bottom: -2px; right: -2px; border-width: 0 3px 3px 0; }
+
+    .laser-scanline {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+      box-shadow: 0 0 10px var(--cyan);
+      animation: scan 2.5s infinite linear;
+      pointer-events: none;
+    }
+    @keyframes scan { 0% { top: 0%; } 100% { top: 100%; } }
+
+    .optical-meta {
+      position: absolute;
+      bottom: 8px;
+      left: 8px;
+      right: 8px;
+      display: flex;
+      justify-content: space-between;
+      background: rgba(7, 9, 14, 0.8);
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      border: 1px solid var(--border);
+    }
+
+    /* 4. Bilateral Confidence Bar (Google Pattern) */
+    .bilateral-bar-wrap {
+      background: var(--bg-card-inner);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .bilateral-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.85rem;
+      font-weight: 700;
+    }
+    .bilateral-track {
+      height: 20px;
+      background: #1e293b;
+      border-radius: 10px;
+      position: relative;
+      display: flex;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .center-divider {
+      position: absolute;
+      left: 50%;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: var(--text-muted);
+      z-index: 5;
+    }
+    .threshold-mark-left, .threshold-mark-right {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: var(--cyan);
+      z-index: 6;
+      box-shadow: 0 0 5px var(--cyan);
+    }
+    .bar-half {
+      width: 50%;
+      height: 100%;
+      position: relative;
+    }
+    .bar-fill-left {
+      position: absolute;
+      right: 0;
+      top: 0;
+      bottom: 0;
+      width: 0%;
+      background: linear-gradient(270deg, var(--pepper), #b91c1c);
+      transition: width 0.15s ease;
+    }
+    .bar-fill-right {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 0%;
+      background: linear-gradient(90deg, var(--papaya), #d97706);
+      transition: width 0.15s ease;
+    }
+
+    /* 5. Actuation Ripple Banner (Splash Pattern) */
+    .actuation-splash {
+      margin-top: 10px;
+      padding: 12px;
+      border-radius: 10px;
+      text-align: center;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.9rem;
+      font-weight: 800;
+      border: 1px solid var(--border);
+      background: var(--bg-card-inner);
+      transition: all 0.2s ease;
+    }
+    .splash-active-pepper {
+      background: rgba(239, 68, 68, 0.15);
+      border-color: var(--pepper);
+      color: var(--pepper);
+      box-shadow: 0 0 20px var(--pepper-glow);
+    }
+    .splash-active-papaya {
+      background: rgba(245, 158, 11, 0.15);
+      border-color: var(--papaya);
+      color: var(--papaya);
+      box-shadow: 0 0 20px var(--papaya-glow);
+    }
+
+    /* 7 & 8. Digital Twin Mechanical Chute & Servo Dial */
+    .chute-stage {
+      width: 100%;
+      height: 330px;
+      background: var(--bg-card-inner);
+      border: 1px dashed var(--border);
+      border-radius: 14px;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding-top: 16px;
+    }
+    .hopper {
+      width: 74px;
+      height: 38px;
+      background: #334155;
+      clip-path: polygon(0 0, 100% 0, 70% 100%, 30% 100%);
+      position: relative;
+      z-index: 5;
+    }
+    .servo-mount {
+      position: relative;
+      margin-top: 10px;
+      z-index: 6;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .servo-dial {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: #38bdf8;
+      border: 3px solid #0f172a;
+      box-shadow: 0 0 8px #38bdf8;
+    }
+    .diverter-flap {
+      position: absolute;
+      top: 10px;
+      width: 8px;
+      height: 100px;
+      background: #38bdf8;
+      border-radius: 4px;
+      transform-origin: top center;
+      transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+      z-index: 4;
+    }
+    .diverter-flap.tilt-pepper {
+      transform: rotate(40deg);
+      background: var(--pepper);
+      box-shadow: 0 0 12px var(--pepper);
+    }
+    .diverter-flap.tilt-papaya {
+      transform: rotate(-40deg);
+      background: var(--papaya);
+      box-shadow: 0 0 12px var(--papaya);
+    }
+
+    /* Dynamic Jiggle Vibration Animation */
+    .jiggle-wave {
+      position: absolute;
+      top: 80px;
+      font-size: 0.65rem;
+      font-family: 'JetBrains Mono', monospace;
+      color: #64748b;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    .jiggle-active {
+      opacity: 1 !important;
+      color: var(--cyan) !important;
+      animation: wave 0.2s infinite alternate;
+    }
+    @keyframes wave { 0% { transform: scale(0.95); } 100% { transform: scale(1.05); } }
+
+    /* Canvas Seed Physics Particle */
+    #physics-canvas {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 8;
+    }
+
+    /* Sorting Bins */
+    .bins-row {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      padding: 12px;
+      z-index: 10;
+    }
+    .bin-target {
+      background: rgba(14, 19, 31, 0.85);
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      padding: 10px;
+      text-align: center;
+      transition: all 0.2s;
+    }
+    .bin-target.active-pepper {
+      border-color: var(--pepper);
+      background: rgba(239, 68, 68, 0.12);
+      transform: scale(1.02);
+    }
+    .bin-target.active-papaya {
+      border-color: var(--papaya);
+      background: rgba(245, 158, 11, 0.12);
+      transform: scale(1.02);
+    }
+    .bin-name {
+      font-size: 0.8rem;
+      font-weight: 800;
+    }
+    .bin-count {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.7rem;
+      font-weight: 800;
+      margin-top: 2px;
+    }
+
+    /* 9. Yield Analytics Panel (Buhler Mass Balance) */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .kpi-tile {
+      background: var(--bg-card-inner);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+    }
+    .kpi-title {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+    .kpi-value {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.4rem;
+      font-weight: 800;
+      color: var(--text);
+      margin-top: 4px;
+    }
+
+    /* 10. Sensitivity Slider */
+    .slider-wrap {
+      background: var(--bg-card-inner);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    .slider-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .styled-range {
+      width: 100%;
+      accent-color: var(--cyan);
+      cursor: pointer;
+    }
+
+    /* 6. Audit Photo Grid (Google PhotoGrid Pattern) */
+    .audit-filmstrip {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px 24px;
+    }
+    .filmstrip-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .filmstrip-track {
+      display: flex;
+      gap: 12px;
+      overflow-x: auto;
+      padding-bottom: 6px;
+      min-height: 95px;
+    }
+    .film-frame {
+      min-width: 90px;
+      max-width: 90px;
+      height: 90px;
+      border-radius: 8px;
+      border: 2px solid var(--border);
+      position: relative;
+      overflow: hidden;
+      background: #000;
+      animation: fadeIn 0.3s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
+    .film-frame img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .film-badge {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-align: center;
+      padding: 2px 0;
+      color: #fff;
+    }
+    .badge-pepper { background: var(--pepper); }
+    .badge-papaya { background: var(--papaya); }
+
+    /* Buttons */
+    .action-btn {
+      padding: 10px 16px;
+      border-radius: 10px;
+      font-family: inherit;
+      font-weight: 700;
+      font-size: 0.85rem;
+      border: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.15s ease;
+    }
+    .btn-cyan {
+      background: var(--cyan);
+      color: #07090e;
+    }
+    .btn-cyan:hover { background: #38bdf8; transform: translateY(-1px); }
+    .btn-outline {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn-outline:hover { background: var(--bg-card); border-color: var(--border-bright); }
+    .btn-demo {
+      background: linear-gradient(135deg, #8b5cf6, #ec4899);
+      color: #fff;
+    }
+    .btn-demo:hover { opacity: 0.9; transform: translateY(-1px); }
+  </style>
+</head>
+<body>
+
+  <!-- 1. Telemetry Header -->
+  <header>
+    <div class="brand-wrap">
+      <div class="brand-logo">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#07090e" stroke-width="2.5"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+      </div>
+      <div>
+        <div class="brand-title">AGRI-VISION SCADA &bull; SEED SEPARATOR</div>
+        <div class="brand-subtitle">CYBER-PHYSICAL DIGITAL TWIN &bull; GOOGLE TINY SORTER PATTERN</div>
+      </div>
+    </div>
+
+    <div class="telemetry-badges">
+      <div class="t-badge"><div class="pulse-dot"></div><span id="model-status">STANDBY</span></div>
+      <div class="t-badge">LATENCY: <span id="telemetry-latency" style="color: var(--cyan);">-- ms</span></div>
+      <div class="t-badge">FPS: <span id="telemetry-fps" style="color: var(--cyan);">0</span></div>
+      <div class="t-badge"><span id="serial-badge-dot" style="width: 7px; height: 7px; border-radius: 50%; background: #64748b; display: inline-block;"></span> ARDUINO: <span id="serial-status-text" style="color: var(--text-muted);">OFF</span></div>
+      <button class="action-btn btn-outline" style="padding: 6px 12px;" onclick="toggleAudio()"><span id="audio-icon">🔊</span> AUDIO</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="dashboard-grid">
+
+      <!-- COLUMN 1: Machine Perception & Optical Chamber -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+            Optical Chamber
+          </div>
+          <span style="font-size: 0.75rem; font-family: 'JetBrains Mono'; color: var(--text-muted);">224×224 RGB</span>
+        </div>
+
+        <div class="viewport-wrapper">
+          <div id="webcam-canvas-container">
+            <div style="height: 100%; display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 0.85rem; text-align: center; padding: 20px;">
+              Camera Offline.<br>Start Laptop Camera or Run Flight Test.
+            </div>
+          </div>
+          <div class="hud-reticle" id="optical-reticle"></div>
+          <div class="laser-scanline"></div>
+          <div class="optical-meta">
+            <span id="optical-gate-telemetry">GATE: IDLE (CHAMBER CLEAR)</span>
+            <span id="focal-state">WAITING TARGET</span>
+          </div>
+        </div>
+
+        <!-- 4. Bilateral Confidence Bar (Google Tiny Sorter Pattern) -->
+        <div class="bilateral-bar-wrap">
+          <div class="bilateral-header">
+            <span style="color: var(--pepper);">🌶️ PEPPER <span id="pct-pepper">0.0%</span></span>
+            <span style="color: var(--papaya);"><span id="pct-papaya">0.0%</span> 🥭 PAPAYA</span>
+          </div>
+          <div class="bilateral-track">
+            <div class="bar-half"><div id="bar-pepper" class="bar-fill-left"></div></div>
+            <div class="center-divider"></div>
+            <div class="bar-half"><div id="bar-papaya" class="bar-fill-right"></div></div>
+            <div id="thresh-left" class="threshold-mark-left" style="left: 10%;"></div>
+            <div id="thresh-right" class="threshold-mark-right" style="right: 10%;"></div>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; font-family: 'JetBrains Mono', monospace; padding-top: 4px; border-top: 1px dashed var(--border);">
+            <span style="color: var(--text-muted); display: flex; align-items: center; gap: 6px;">
+              <span id="bg-indicator-dot" style="width: 7px; height: 7px; border-radius: 50%; background: var(--emerald);"></span>
+              CHAMBER IDLE / BACKGROUND:
+            </span>
+            <span id="pct-background" style="color: var(--emerald); font-weight: 700;">0.0%</span>
+          </div>
+        </div>
+
+        <!-- 5. Actuation Ripple Banner (Splash Pattern) -->
+        <div id="splash-banner" class="actuation-splash">
+          SYSTEM ARMED &bull; AWAITING SEED TRANSIT
+        </div>
+
+        <div style="display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap;">
+          <button id="btn-camera" class="action-btn btn-cyan" onclick="startCamera()">📷 Start Camera</button>
+          <button id="btn-tare" class="action-btn btn-outline" onclick="calibrateBackground()" title="Calibrate current camera view as empty background">🎯 Tare Chute</button>
+          <button id="btn-gate" class="action-btn btn-outline" onclick="toggleOpticalGate()" title="Toggle hardware-grade optical trigger gate">🛡️ Gate: ON</button>
+          <button id="btn-zoom" class="action-btn btn-outline" onclick="toggleZoom()">🔍 Zoom: <span id="zoom-label">1.0×</span></button>
+          <button id="btn-serial" class="action-btn btn-outline" onclick="toggleSerialConnect()">🔌 Connect Arduino</button>
+          <label for="img-file" class="action-btn btn-outline" style="cursor: pointer;">📁 Upload Image</label>
+          <input type="file" id="img-file" accept="image/*" style="display: none;" onchange="handleManualUpload(event)">
+          <button class="action-btn btn-demo" onclick="triggerFlightTest()">⚡ Flight Test</button>
+        </div>
+      </div>
+
+      <!-- COLUMN 2: 2.5D Digital Twin Chute & Actuation Simulator -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            Digital Twin Sorter
+          </div>
+          <span id="servo-angle-label" style="font-size: 0.75rem; font-family: 'JetBrains Mono'; color: var(--cyan);">SERVO: 90° (NEUTRAL)</span>
+        </div>
+
+        <div class="chute-stage">
+          <canvas id="physics-canvas" width="400" height="330"></canvas>
+          <div class="hopper"></div>
+          <div class="servo-mount">
+            <div class="servo-dial"></div>
+            <div id="diverter-flap" class="diverter-flap"></div>
+          </div>
+          <div id="jiggle-indicator" class="jiggle-wave">AGITATION JIGGLE ACTIVE (~100ms)</div>
+
+          <div class="bins-row">
+            <div id="bin-pepper" class="bin-target">
+              <div class="bin-name" style="color: var(--pepper);">🌶️ BIN A: PEPPER</div>
+              <div id="tally-pepper" class="bin-count">0</div>
+            </div>
+            <div id="bin-papaya" class="bin-target">
+              <div class="bin-name" style="color: var(--papaya);">🥭 BIN B: PAPAYA</div>
+              <div id="tally-papaya" class="bin-count">0</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 10. Satake Smart Sensitivity Slider -->
+        <div class="slider-wrap" style="margin-top: 14px;">
+          <div class="slider-header">
+            <span>SENSITIVITY THRESHOLD (SATAKE MATRIX)</span>
+            <span id="thresh-val" style="color: var(--cyan); font-family: 'JetBrains Mono';">90%</span>
+          </div>
+          <input type="range" min="70" max="98" value="90" class="styled-range" id="sensitivity-slider" oninput="updateSensitivity(this.value)">
+        </div>
+      </div>
+
+      <!-- COLUMN 3: Bühler SORTEX Yield Analytics & Telemetry -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+            Mass Balance & Yield
+          </div>
+          <span style="font-size: 0.75rem; font-family: 'JetBrains Mono'; color: var(--emerald);">BÜHLER SMS SPEC</span>
+        </div>
+
+        <div class="kpi-grid">
+          <div class="kpi-tile">
+            <div class="kpi-title">TOTAL SEEDS SORTED</div>
+            <div id="kpi-total" class="kpi-value">0</div>
+          </div>
+          <div class="kpi-tile">
+            <div class="kpi-title">PURITY INDEX</div>
+            <div id="kpi-purity" class="kpi-value" style="color: var(--emerald);">100%</div>
+          </div>
+          <div class="kpi-tile">
+            <div class="kpi-title">THROUGHPUT RATE</div>
+            <div id="kpi-rate" class="kpi-value">0 <span style="font-size: 0.8rem; color: var(--text-muted);">seeds/min</span></div>
+          </div>
+          <div class="kpi-tile">
+            <div class="kpi-title">DEBOUNCE TIMER</div>
+            <div class="kpi-value" style="color: var(--cyan);">2000 <span style="font-size: 0.8rem; color: var(--text-muted);">ms</span></div>
+          </div>
+        </div>
+
+        <div style="background: var(--bg-card-inner); border: 1px solid var(--border); border-radius: 12px; padding: 14px; flex: 1; display: flex; flex-direction: column; justify-content: space-between;">
+          <div>
+            <div style="font-size: 0.8rem; font-weight: 700; margin-bottom: 8px;">SORT RATIO DISTRIBUTION</div>
+            <div style="display: flex; gap: 8px; font-size: 0.75rem; font-family: 'JetBrains Mono';">
+              <span style="color: var(--pepper);">Pepper: <span id="dist-pepper">0%</span></span>
+              <span style="color: var(--papaya); margin-left: auto;">Papaya: <span id="dist-papaya">0%</span></span>
+            </div>
+            <div style="height: 10px; background: #1e293b; border-radius: 5px; overflow: hidden; display: flex; margin-top: 6px;">
+              <div id="ratio-pepper" style="width: 50%; background: var(--pepper); transition: width 0.3s;"></div>
+              <div id="ratio-papaya" style="width: 50%; background: var(--papaya); transition: width 0.3s;"></div>
+            </div>
+          </div>
+
+          <div style="font-size: 0.75rem; color: var(--text-muted); font-family: 'JetBrains Mono'; border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px;">
+            Hardware Interface: <code>WebSerial API @ 9600 Baud</code><br>
+            Backbone: <code>MobileNetV2 (155 L &bull; 3 Classes: Pepper, Papaya, Background)</code>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 6. Audit Photo Grid (Google PhotoGrid FIFO Pattern) -->
+    <div class="audit-filmstrip">
+      <div class="filmstrip-header">
+        <div style="font-size: 0.9rem; font-weight: 800; display: flex; align-items: center; gap: 8px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+          INSPECTION AUDIT FILMSTRIP (ROLLING FIFO BUFFER)
+        </div>
+        <span style="font-size: 0.75rem; font-family: 'JetBrains Mono'; color: var(--text-muted);">LAST 8 OPTICAL CAPTURES</span>
+      </div>
+      <div id="filmstrip-track" class="filmstrip-track">
+        <div style="color: #64748b; font-size: 0.8rem; display: flex; align-items: center; padding: 20px;">
+          No items sorted yet. Captures will log here automatically upon classification.
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- TensorFlow.js and TM Image Library -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.5/dist/teachablemachine-image.min.js"></script>
+
+  <script>
+    const MODEL_PATH = "./";
+    let model, webcam, isCameraActive = false;
+    let counts = { pepper: 0, papaya: 0 };
+    let threshold = 0.90; // 90% default Satake threshold
+    let isPaused = false;
+    let audioEnabled = true;
+    let lastActionTimestamp = 0;
+    let sortingHistory = [];
+    let audioCtx = null;
+    let zoomLevel = 1.0; // Default 1.0x Full Frame (matches Teachable Machine training field of view)
+
+    // Hardware-Grade Optical Presence Gate (Google Coral & Buhler SORTEX Architecture)
+    let opticalGateEnabled = true;
+    let baselineCalibrated = false;
+    let baselinePixels = null; // Stored template buffer of empty chute/desk pixels
+    let sceneStillFrames = 0;
+    let warmupFrames = 0;       // Skip first 30 frames to let camera auto-exposure settle
+
+    // WebSerial Driver (Arduino Uno / Nano @ 9600 Baud)
+    let serialPort = null;
+    let serialWriter = null;
+
+    // Macro Crop Offscreen Buffer (Upscales the central focal region to 224x224)
+    const macroCanvas = document.createElement("canvas");
+    macroCanvas.width = 224;
+    macroCanvas.height = 224;
+    const macroCtx = macroCanvas.getContext("2d");
+
+    function toggleZoom() {
+      if (zoomLevel === 1.0) zoomLevel = 1.5;
+      else if (zoomLevel === 1.5) zoomLevel = 2.0;
+      else zoomLevel = 1.0;
+      document.getElementById("zoom-label").innerText = zoomLevel + "×";
+      
+      const reticle = document.getElementById("optical-reticle");
+      if (reticle) {
+        const insetVal = zoomLevel === 1.0 ? "20px" : (zoomLevel === 1.5 ? "45px" : "70px");
+        reticle.style.inset = insetVal;
+      }
+    }
+
+    // Optical Presence Gate (Google Coral / Buhler SORTEX Architecture)
+    // 2-class model has NO background class - this gate is the ONLY background/other rejection.
+    function analyzePresence(canvas) {
+      if (!opticalGateEnabled) {
+        return { present: true, coveragePct: 100, isMoved: false, avgDiff: 0,
+                 isPhotometricSeed: true, isGreenBackground: false, isBright: false,
+                 avgR: 0, avgG: 0, avgB: 0, avgLum: 0 };
+      }
+
+      const roiSize = 96; // Slightly larger ROI for better coverage detection
+      const sw = canvas.width, sh = canvas.height;
+      const sx = Math.floor((sw - roiSize) / 2);
+      const sy = Math.floor((sh - roiSize) / 2);
+
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      let imgData;
+      try { imgData = ctx.getImageData(sx, sy, roiSize, roiSize); }
+      catch (e) { return { present: true, coveragePct: 100, isMoved: false, avgDiff: 0, isPhotometricSeed: true, isGreenBackground: false, isBright: false }; }
+
+      const data = imgData.data;
+      const n = roiSize * roiSize;
+
+      // Warmup: skip first 30 frames while camera auto-exposure/white-balance settles.
+      // This prevents the gate from calibrating to the wrong luminance baseline.
+      if (warmupFrames < 30) {
+        warmupFrames++;
+        return { present: false, coveragePct: 0, isMoved: false, avgDiff: 0,
+                 isPhotometricSeed: false, isGreenBackground: false, isBright: false,
+                 isSkin: false, avgR: 0, avgG: 0, avgB: 0, avgLum: 0, warming: true };
+      }
+
+      // First stable frame after warmup: auto-capture baseline template of empty surface.
+      // User can also manually press "Tare Chute" at any time to reset the baseline.
+      if (!baselineCalibrated || !baselinePixels || baselinePixels.length !== n * 3) {
+        baselinePixels = new Uint8ClampedArray(n * 3); // Store R,G,B per pixel
+        for (let i = 0, j = 0; i < data.length; i += 4, j += 3) {
+          baselinePixels[j]   = data[i];
+          baselinePixels[j+1] = data[i+1];
+          baselinePixels[j+2] = data[i+2];
+        }
+        baselineCalibrated = true;
+        return { present: false, coveragePct: 0, isMoved: false, avgDiff: 0, isPhotometricSeed: false, isGreenBackground: false, isBright: false, isSkin: false };
+      }
+
+      // Pixel diff: compare current frame to baseline template
+      const PIXEL_THRESH = 22; // Per-pixel change threshold (ignores sensor noise)
+      let diffSum = 0, changedCount = 0;
+      let fgR = 0, fgG = 0, fgB = 0; // Foreground (changed) pixel color accumulator
+
+      for (let i = 0, j = 0, k = 0; i < data.length; i += 4, j += 3, k++) {
+        const dR = Math.abs(data[i]   - baselinePixels[j]);
+        const dG = Math.abs(data[i+1] - baselinePixels[j+1]);
+        const dB = Math.abs(data[i+2] - baselinePixels[j+2]);
+        const d  = (dR + dG + dB) / 3;
+        diffSum += d;
+        if (d > PIXEL_THRESH) {
+          changedCount++;
+          fgR += data[i]; fgG += data[i+1]; fgB += data[i+2];
+        }
+      }
+
+      const avgDiff    = diffSum / n;
+      const coveragePct = (changedCount / n) * 100;
+
+      // === PHOTOMETRIC SEED VERIFICATION ===
+      // Must be computed BEFORE isMoved / auto-rezero so rejected objects
+      // (bright paper, skin, green surface) can never become the new baseline.
+      // A real pepper or papaya seed must satisfy ALL of these:
+      // 1. Blob size: covers 1.5% – 40% of the reticle area (avoids noise & large objects)
+      // 2. Not too bright (rejects white paper, bright cloth, LEDs) lum < 165
+      // 3. Correct color profile: dark/neutral (pepper) OR warm brownish (papaya)
+      // 4. Not a large bright warm blob (rejects human skin/hand)
+
+      let isPhotometricSeed = false;
+      let isGreenBackground = false;
+      let isBright = false;
+      let isSkin   = false;  // declared at outer scope so it is available in the return
+      let avgR = 0, avgG = 0, avgB = 0, avgLum = 0;
+
+      if (changedCount > 0) {
+        avgR   = fgR / changedCount;
+        avgG   = fgG / changedCount;
+        avgB   = fgB / changedCount;
+        avgLum = 0.299 * avgR + 0.587 * avgG + 0.114 * avgB;
+
+        // Reject #1: green/colored surfaces (mousepad, leaves, fabric patterns)
+        isGreenBackground = (avgG > avgR + 18 && avgG > avgB + 18 && avgG > 65);
+
+        // Reject #2: too bright (white paper, printed pages, lights)
+        isBright = (avgLum > 165);
+
+        // Reject #3: large warm blob = human skin/hand (warm + covers > 22% + mid-bright)
+        isSkin = (avgR > avgB + 22 && avgLum > 95 && coveragePct > 22);
+
+        // Pepper seed profile: dark (lum 10–115), near-neutral chroma
+        const isPepperColor = (avgLum >= 10 && avgLum <= 115 && Math.abs(avgR - avgG) < 40 && Math.abs(avgG - avgB) < 40);
+
+        // Papaya seed profile: dark to warm brownish (lum 15–160)
+        const isPapayaColor = (avgLum >= 15 && avgLum <= 160 && (avgR >= avgB - 5));
+
+        // Blob must be seed-sized (not noise, allows single or clustered seeds up to 55% ROI)
+        const isSeedSized = (coveragePct >= 1.0 && coveragePct <= 55.0);
+
+        isPhotometricSeed = isSeedSized && !isGreenBackground && !isBright && !isSkin && (isPepperColor || isPapayaColor);
+      }
+
+      // Camera moved / pointed elsewhere = > 65% of reticle changed at once.
+      // Checked AFTER photometrics so rejected objects keep their diagnostic reason.
+      const isMoved = (coveragePct > 65.0);
+
+      // Auto-rezero: if the scene has genuinely been relocated for > 50 frames (~1.7s),
+      // accept the new surface as the baseline.
+      // Guard: only allow auto-rezero if the scene is NOT a rejected object type
+      // (prevents white paper / hands held still from becoming the new baseline).
+      const isRejectedObject = isBright || isSkin || isGreenBackground;
+      if (isMoved) {
+        if (!isRejectedObject) {
+          sceneStillFrames++;
+          if (sceneStillFrames > 50) {
+            for (let i = 0, j = 0; i < data.length; i += 4, j += 3) {
+              baselinePixels[j] = data[i]; baselinePixels[j+1] = data[i+1]; baselinePixels[j+2] = data[i+2];
+            }
+            sceneStillFrames = 0;
+            return { present: false, coveragePct: 0, isMoved: false, avgDiff: 0,
+                     isPhotometricSeed: false, isGreenBackground: false, isBright: false,
+                     isSkin: false, avgR: 0, avgG: 0, avgB: 0, avgLum: 0 };
+          }
+        }
+        // else: rejected object type — keep sceneStillFrames at 0 so it never triggers auto-rezero
+      } else {
+        sceneStillFrames = 0;
+      }
+
+      return {
+        present: (!isMoved && isPhotometricSeed),
+        isMoved,
+        coveragePct,
+        avgDiff,
+        isPhotometricSeed,
+        isGreenBackground,
+        isBright,
+        isSkin,
+        avgR, avgG, avgB, avgLum
+      };
+    }
+
+    function calibrateBackground() {
+      if (!webcam || !webcam.canvas) {
+        alert("Please start camera first before taring the background.");
+        return;
+      }
+      const roiSize = 96;
+      const sw = webcam.canvas.width, sh = webcam.canvas.height;
+      const sx = Math.floor((sw - roiSize) / 2);
+      const sy = Math.floor((sh - roiSize) / 2);
+      const ctx = webcam.canvas.getContext("2d", { willReadFrequently: true });
+      const imgData = ctx.getImageData(sx, sy, roiSize, roiSize);
+      const data = imgData.data;
+      const n = roiSize * roiSize;
+      
+      baselinePixels = new Uint8ClampedArray(n * 3);
+      for (let i = 0, j = 0; i < data.length; i += 4, j += 3) {
+        baselinePixels[j]   = data[i];
+        baselinePixels[j+1] = data[i+1];
+        baselinePixels[j+2] = data[i+2];
+      }
+      baselineCalibrated = true;
+      sceneStillFrames = 0;
+      
+      const btn = document.getElementById("btn-tare");
+      if (btn) {
+        const orig = btn.innerText;
+        btn.innerText = "✓ Tare Locked";
+        setTimeout(() => { btn.innerText = orig; }, 1400);
+      }
+      const focalState = document.getElementById("focal-state");
+      if (focalState) {
+        focalState.innerText = "CHUTE ZEROED • TEMPLATE LOCKED";
+        focalState.style.color = "var(--cyan)";
+      }
+    }
+
+    function toggleOpticalGate() {
+      opticalGateEnabled = !opticalGateEnabled;
+      const btn = document.getElementById("btn-gate");
+      btn.innerText = opticalGateEnabled ? "🛡️ Gate: ON" : "⚠️ Gate: OFF";
+      btn.style.color = opticalGateEnabled ? "var(--cyan)" : "var(--amber)";
+    }
+
+    // WebSerial API Hardware Driver
+    async function toggleSerialConnect() {
+      const btn = document.getElementById("btn-serial");
+      const dot = document.getElementById("serial-badge-dot");
+      const statusText = document.getElementById("serial-status-text");
+
+      if (!navigator.serial) {
+        alert("WebSerial API is supported in Google Chrome and Microsoft Edge.\nPlease open this dashboard in Chrome or Edge to connect your Arduino.");
+        return;
+      }
+
+      if (serialPort) {
+        try {
+          if (serialWriter) {
+            await serialWriter.close();
+            serialWriter = null;
+          }
+          await serialPort.close();
+          serialPort = null;
+          btn.innerText = "🔌 Connect Arduino";
+          btn.classList.remove("btn-cyan");
+          btn.classList.add("btn-outline");
+          if (dot) dot.style.background = "#64748b";
+          if (statusText) {
+            statusText.innerText = "OFF";
+            statusText.style.color = "var(--text-muted)";
+          }
+        } catch (e) {
+          console.error("Serial disconnect error:", e);
+        }
+        return;
+      }
+
+      try {
+        serialPort = await navigator.serial.requestPort();
+        await serialPort.open({ baudRate: 9600 });
+        const textEncoder = new TextEncoderStream();
+        textEncoder.readable.pipeTo(serialPort.writable);
+        serialWriter = textEncoder.writable.getWriter();
+
+        btn.innerText = "🔌 Disconnect Arduino";
+        btn.classList.remove("btn-outline");
+        btn.classList.add("btn-cyan");
+        if (dot) dot.style.background = "var(--emerald)";
+        if (statusText) {
+          statusText.innerText = "CONNECTED (9600 BAUD)";
+          statusText.style.color = "var(--emerald)";
+        }
+      } catch (err) {
+        console.warn("Serial connection aborted:", err);
+      }
+    }
+
+    async function sendSerialCommand(cmd) {
+      if (serialWriter) {
+        try {
+          await serialWriter.write(cmd + "\r\n");
+        } catch (e) {
+          console.warn("Serial transmit error:", e);
+        }
+      }
+    }
+
+    // Web Audio Synthesizer (Acoustic feedback without external assets)
+    function initAudio() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    function playSolenoidSound(freq = 440) {
+      if (!audioEnabled) return;
+      initAudio();
+      try {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(80, audioCtx.currentTime + 0.12);
+        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.12);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.12);
+      } catch (e) {}
+    }
+
+    function toggleAudio() {
+      audioEnabled = !audioEnabled;
+      document.getElementById("audio-icon").innerText = audioEnabled ? "🔊" : "🔇";
+    }
+
+    async function loadModel() {
+      if (window.location.protocol === "file:") {
+        alert("⚠️ CORS Error: Browsers block loading AI model files directly via file://\n\nPlease run this in PowerShell:\ncd 'c:\\Users\\M S I\\Downloads\\tm-my-image-model'\npython -m http.server 8000\n\nThen open: http://localhost:8000");
+        document.getElementById("model-status").innerText = "CORS ERROR (USE HTTP)";
+        document.getElementById("model-status").style.color = "var(--pepper)";
+        return;
+      }
+
+      if (!model) {
+        document.getElementById("model-status").innerText = "LOADING MODEL...";
+        try {
+          model = await tmImage.load(MODEL_PATH + "model.json", MODEL_PATH + "metadata.json");
+          document.getElementById("model-status").innerText = "PERCEPTION ACTIVE";
+        } catch (err) {
+          console.error("Model load error:", err);
+          document.getElementById("model-status").innerText = "MODEL LOAD FAILED";
+          document.getElementById("model-status").style.color = "var(--pepper)";
+          alert("Error loading model files: " + (err.message || err));
+        }
+      }
+    }
+
+    async function startCamera() {
+      await loadModel();
+      if (isCameraActive) return;
+      initAudio();
+
+      const btn = document.getElementById("btn-camera");
+      btn.innerText = "Connecting...";
+      btn.disabled = true;
+
+      try {
+        webcam = new tmImage.Webcam(380, 380, true);
+        await webcam.setup();
+        await webcam.play();
+
+        const container = document.getElementById("webcam-canvas-container");
+        container.innerHTML = "";
+        container.appendChild(webcam.canvas);
+
+        btn.innerText = "● Camera Online";
+        btn.classList.add("btn-cyan");
+        isCameraActive = true;
+
+        window.requestAnimationFrame(inspectionLoop);
+      } catch (err) {
+        alert("Camera access denied or unavailable.");
+        btn.innerText = "📷 Start Camera";
+        btn.disabled = false;
+      }
+    }
+
+    let frameCount = 0, lastFpsTime = performance.now();
+    async function inspectionLoop() {
+      if (!isCameraActive) return;
+      webcam.update();
+
+      const t0 = performance.now();
+      if (!isPaused) {
+        let inputTarget = webcam.canvas;
+        if (zoomLevel > 1.0) {
+          const cropSize = 380 / zoomLevel;
+          const sx = (380 - cropSize) / 2;
+          const sy = (380 - cropSize) / 2;
+          macroCtx.drawImage(webcam.canvas, sx, sy, cropSize, cropSize, 0, 0, 224, 224);
+          inputTarget = macroCanvas;
+        }
+
+        // Hardware-Grade Presence Analysis (Google Coral is_good_photo pattern)
+        const presence = analyzePresence(webcam.canvas);
+
+        const predictions = await model.predict(inputTarget);
+        const latency = Math.round(performance.now() - t0);
+        document.getElementById("telemetry-latency").innerText = `${latency} ms`;
+
+        processInference(predictions, inputTarget, presence);
+      }
+
+      frameCount++;
+      const now = performance.now();
+      if (now - lastFpsTime >= 1000) {
+        document.getElementById("telemetry-fps").innerText = frameCount;
+        frameCount = 0;
+        lastFpsTime = now;
+      }
+
+      window.requestAnimationFrame(inspectionLoop);
+    }
+
+    function processInference(predictions, sourceCanvas, presence = null) {
+      if (!presence) {
+        presence = {
+          present: true,
+          coveragePct: 15.0,
+          isMoved: false,
+          isPhotometricSeed: true,
+          isGreenBackground: false,
+          isBright: false,
+          isSkin: false,
+          warming: false,
+          avgDiff: 30
+        };
+      }
+      // During warmup, don't process or display anything
+      if (presence.warming) return;
+
+      const covVal = (presence && typeof presence.coveragePct === "number") ? presence.coveragePct : 0.0;
+      let pepperProb = 0, papayaProb = 0, backgroundProb = 0;
+      let hasBgClass = false;
+      for (let p of predictions) {
+        const name = p.className.toLowerCase();
+        if (name.includes("pepper")) pepperProb = p.probability;
+        else if (name.includes("papaya")) papayaProb = p.probability;
+        else if (name.includes("background") || name.includes("empty") || name.includes("none") || name.includes("idle")) {
+          backgroundProb = p.probability;
+          hasBgClass = true;
+        }
+      }
+
+      // In a 2-class model (pepper/papaya), background clearance is driven by the optical presence gate:
+      if (!hasBgClass) {
+        backgroundProb = presence.present ? 0.0 : 1.0;
+      }
+
+      // Update Bilateral Confidence Bar: only show seed confidence when a valid seed is present in reticle
+      const dispPepper = (presence.present || !opticalGateEnabled) ? pepperProb : 0;
+      const dispPapaya = (presence.present || !opticalGateEnabled) ? papayaProb : 0;
+      document.getElementById("pct-pepper").innerText = (dispPepper * 100).toFixed(1) + "%";
+      document.getElementById("pct-papaya").innerText = (dispPapaya * 100).toFixed(1) + "%";
+      document.getElementById("bar-pepper").style.width = (dispPepper * 100) + "%";
+      document.getElementById("bar-papaya").style.width = (dispPapaya * 100) + "%";
+
+      // Update Background Clearance Meter
+      const bgEl = document.getElementById("pct-background");
+      const bgDot = document.getElementById("bg-indicator-dot");
+      if (bgEl) bgEl.innerText = (backgroundProb * 100).toFixed(1) + "%";
+      if (bgDot) {
+        bgDot.style.background = backgroundProb > 0.4 ? "var(--emerald)" : "#64748b";
+      }
+
+      // Optical Reticle & Telemetry Feedback
+      const reticle = document.getElementById("optical-reticle");
+      const gateTelemetry = document.getElementById("optical-gate-telemetry");
+      const focalState = document.getElementById("focal-state");
+
+      if (gateTelemetry) {
+        if (presence.warming) {
+          gateTelemetry.innerText = `WARMING UP (${warmupFrames}/30 frames)`;
+          gateTelemetry.style.color = "var(--text-muted)";
+        } else if (presence.isMoved) {
+          gateTelemetry.innerText = `SCENE SHIFTED (${covVal.toFixed(0)}%)`;
+          gateTelemetry.style.color = "var(--amber)";
+        } else if (presence.isBright) {
+          gateTelemetry.innerText = `REJECTED (BRIGHT/PAPER)`;
+          gateTelemetry.style.color = "var(--amber)";
+        } else if (presence.isSkin) {
+          gateTelemetry.innerText = `REJECTED (HAND/SKIN)`;
+          gateTelemetry.style.color = "var(--amber)";
+        } else if (presence.isGreenBackground) {
+          gateTelemetry.innerText = `REJECTED (COLORED SURFACE)`;
+          gateTelemetry.style.color = "var(--amber)";
+        } else if (presence.present) {
+          gateTelemetry.innerText = `SEED IN RETICLE (${covVal.toFixed(1)}%)`;
+          gateTelemetry.style.color = "var(--emerald)";
+        } else {
+          gateTelemetry.innerText = `GATE: LOCKED (CLEAR ${covVal.toFixed(1)}%)`;
+          gateTelemetry.style.color = "var(--text-muted)";
+        }
+      }
+
+      // STAGE 1: Physical Motion / Relocation Guard
+      if (opticalGateEnabled && presence.isMoved) {
+        if (reticle) reticle.classList.remove("reticle-active");
+        if (focalState) {
+          focalState.innerText = "CAMERA RELOCATED • AUTO-ZEROING...";
+          focalState.style.color = "var(--amber)";
+        }
+        return; // Absolute inhibit when camera is moving or pointed elsewhere!
+      }
+
+      // STAGE 2: Rejection of Non-Seed Objects (Rolled Paper, Hands, Mousepad)
+      if (opticalGateEnabled && presence.isBright) {
+        if (reticle) reticle.classList.remove("reticle-active");
+        if (focalState) {
+          focalState.innerText = "REJECTED: BRIGHT NON-SEED (ROLLED PAPER/GLARE)";
+          focalState.style.color = "var(--amber)";
+        }
+        return;
+      }
+
+      if (opticalGateEnabled && presence.isSkin) {
+        if (reticle) reticle.classList.remove("reticle-active");
+        if (focalState) {
+          focalState.innerText = "REJECTED: HAND / SKIN DETECTED";
+          focalState.style.color = "var(--amber)";
+        }
+        return;
+      }
+
+      if (opticalGateEnabled && presence.isGreenBackground) {
+        if (reticle) reticle.classList.remove("reticle-active");
+        if (focalState) {
+          focalState.innerText = "REJECTED: GREEN BACKGROUND SURFACE";
+          focalState.style.color = "var(--amber)";
+        }
+        return;
+      }
+
+      // STAGE 3: Empty Chamber Inhibit
+      if (opticalGateEnabled && !presence.present) {
+        if (reticle) reticle.classList.remove("reticle-active");
+        if (focalState) {
+          focalState.innerText = "CHAMBER EMPTY (OPTICAL GATE LOCKED)";
+          focalState.style.color = "var(--text-muted)";
+        }
+        return; // Absolute inhibit when no seed is physically in reticle!
+      }
+
+      if (reticle) reticle.classList.add("reticle-active");
+
+      // STAGE 4: AI Model 3rd Class Background Clearance (when model includes a background class)
+      if (hasBgClass && backgroundProb > 0.35) {
+        if (focalState) {
+          focalState.innerText = "BACKGROUND DOMINANT (IDLE)";
+          focalState.style.color = "var(--emerald)";
+        }
+        return;
+      }
+
+      // STAGE 5: Strict Dominance Margin Gating
+      const now = Date.now();
+      const canActuate = (now - lastActionTimestamp >= 2000);
+
+      if (pepperProb >= threshold && pepperProb > papayaProb) {
+        if (focalState) {
+          focalState.innerText = `TARGET: PEPPER DETECTED (${(pepperProb * 100).toFixed(0)}%)`;
+          focalState.style.color = "var(--pepper)";
+        }
+        if (canActuate) {
+          executeSort("pepper", pepperProb, sourceCanvas);
+        }
+      } else if (papayaProb >= threshold && papayaProb > pepperProb) {
+        if (focalState) {
+          focalState.innerText = `TARGET: PAPAYA DETECTED (${(papayaProb * 100).toFixed(0)}%)`;
+          focalState.style.color = "var(--papaya)";
+        }
+        if (canActuate) {
+          executeSort("papaya", papayaProb, sourceCanvas);
+        }
+      } else {
+        if (focalState) {
+          focalState.innerText = "AMBIGUOUS TARGET TRANSIT";
+          focalState.style.color = "var(--amber)";
+        }
+      }
+    }
+
+    function executeSort(type, confidence, sourceCanvas) {
+      lastActionTimestamp = Date.now();
+      counts[type]++;
+      playSolenoidSound(type === "pepper" ? 520 : 680);
+
+      // Transmit to Arduino Microcontroller over WebSerial @ 9600 Baud
+      sendSerialCommand(type === "pepper" ? "1" : "2");
+
+      // 1. Actuation Splash
+      const banner = document.getElementById("splash-banner");
+      banner.className = `actuation-splash splash-active-${type}`;
+      banner.innerHTML = `ACTUATING SOLENOID: ${type === 'pepper' ? '🌶️ PEPPER' : '🥭 PAPAYA'} (${(confidence * 100).toFixed(1)}%)`;
+
+      // 2. Diverter Flap & Servo Dial
+      const flap = document.getElementById("diverter-flap");
+      flap.className = `diverter-flap tilt-${type}`;
+      document.getElementById("servo-angle-label").innerText = `SERVO: ${type === 'pepper' ? '10° (LEFT)' : '170° (RIGHT)'}`;
+
+      // 3. Jiggle Indicator (Google Tiny Sorter Pattern)
+      const jiggle = document.getElementById("jiggle-indicator");
+      jiggle.classList.add("jiggle-active");
+
+      // 4. Highlight Bins
+      const binPepper = document.getElementById("bin-pepper");
+      const binPapaya = document.getElementById("bin-papaya");
+      if (type === "pepper") {
+        binPepper.classList.add("active-pepper");
+        binPapaya.classList.remove("active-papaya");
+      } else {
+        binPapaya.classList.add("active-papaya");
+        binPepper.classList.remove("active-pepper");
+      }
+      document.getElementById(`tally-${type}`).innerText = counts[type];
+
+      // 5. Canvas Particle Drop Physics
+      triggerParticlePhysics(type);
+
+      // 6. Append to Rolling FIFO Filmstrip
+      if (sourceCanvas) captureAuditThumb(sourceCanvas, type, confidence);
+
+      // 7. Update Mass Balance Metrics
+      updateMetrics();
+
+      // Debounce Reset (2000ms freeze)
+      setTimeout(() => {
+        flap.className = "diverter-flap";
+        jiggle.classList.remove("jiggle-active");
+        binPepper.classList.remove("active-pepper");
+        binPapaya.classList.remove("active-papaya");
+        document.getElementById("servo-angle-label").innerText = "SERVO: 90° (NEUTRAL)";
+        banner.className = "actuation-splash";
+        banner.innerText = "SYSTEM ARMED • AWAITING SEED TRANSIT";
+      }, 1800);
+    }
+
+    function captureAuditThumb(canvas, type, confidence) {
+      const track = document.getElementById("filmstrip-track");
+      if (sortingHistory.length === 0) track.innerHTML = "";
+
+      const thumbCanvas = document.createElement("canvas");
+      thumbCanvas.width = 90;
+      thumbCanvas.height = 90;
+      const ctx = thumbCanvas.getContext("2d");
+      ctx.drawImage(canvas, 0, 0, 90, 90);
+
+      const frame = document.createElement("div");
+      frame.className = "film-frame";
+      const img = document.createElement("img");
+      img.src = thumbCanvas.toDataURL();
+
+      const badge = document.createElement("div");
+      badge.className = `film-badge badge-${type}`;
+      badge.innerText = `${type.toUpperCase()} ${(confidence * 100).toFixed(0)}%`;
+
+      frame.appendChild(img);
+      frame.appendChild(badge);
+      track.prepend(frame);
+
+      sortingHistory.unshift({ type, confidence, time: new Date() });
+      if (sortingHistory.length > 8) {
+        sortingHistory.pop();
+        if (track.children.length > 8) track.removeChild(track.lastChild);
+      }
+    }
+
+    function updateMetrics() {
+      const total = counts.pepper + counts.papaya;
+      document.getElementById("kpi-total").innerText = total;
+
+      const purity = total > 0 ? (Math.max(counts.pepper, counts.papaya) / total * 100).toFixed(1) : 100;
+      document.getElementById("kpi-purity").innerText = `${purity}%`;
+
+      const pPepper = total > 0 ? Math.round((counts.pepper / total) * 100) : 50;
+      const pPapaya = total > 0 ? Math.round((counts.papaya / total) * 100) : 50;
+      document.getElementById("dist-pepper").innerText = `${pPepper}%`;
+      document.getElementById("dist-papaya").innerText = `${pPapaya}%`;
+      document.getElementById("ratio-pepper").style.width = `${pPepper}%`;
+      document.getElementById("ratio-papaya").style.width = `${pPapaya}%`;
+      document.getElementById("kpi-rate").innerHTML = `${Math.min(total * 4, 180)} <span style="font-size: 0.8rem; color: var(--text-muted);">seeds/min</span>`;
+    }
+
+    function updateSensitivity(val) {
+      threshold = val / 100;
+      document.getElementById("thresh-val").innerText = `${val}%`;
+      const offset = (1 - threshold) * 50;
+      document.getElementById("thresh-left").style.left = `${offset}%`;
+      document.getElementById("thresh-right").style.right = `${offset}%`;
+    }
+
+    // 2.5D Particle Physics
+    const pCanvas = document.getElementById("physics-canvas");
+    const pCtx = pCanvas.getContext("2d");
+    let particles = [];
+
+    function triggerParticlePhysics(type) {
+      particles.push({
+        x: pCanvas.width / 2,
+        y: 40,
+        vx: type === "pepper" ? -2.8 : 2.8,
+        vy: 2.2,
+        radius: 6,
+        color: type === "pepper" ? "#ef4444" : "#f59e0b",
+        gravity: 0.25,
+        life: 0
+      });
+    }
+
+    function renderPhysics() {
+      pCtx.clearRect(0, 0, pCanvas.width, pCanvas.height);
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.vy += p.gravity;
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life++;
+
+        pCtx.beginPath();
+        pCtx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        pCtx.fillStyle = p.color;
+        pCtx.shadowColor = p.color;
+        pCtx.shadowBlur = 10;
+        pCtx.fill();
+        pCtx.shadowBlur = 0;
+
+        if (p.y > 310 || p.life > 45) particles.splice(i, 1);
+      }
+      requestAnimationFrame(renderPhysics);
+    }
+    renderPhysics();
+
+    // Flight Simulator (Automated Demo Mode)
+    async function triggerFlightTest() {
+      await loadModel();
+      initAudio();
+
+      const mockSeeds = [
+        { type: "pepper", conf: 0.96 },
+        { type: "papaya", conf: 0.94 },
+        { type: "pepper", conf: 0.98 },
+        { type: "papaya", conf: 0.92 }
+      ];
+
+      let idx = 0;
+      const interval = setInterval(() => {
+        if (idx >= mockSeeds.length) {
+          clearInterval(interval);
+          return;
+        }
+        const item = mockSeeds[idx++];
+        
+        // Mock a crop canvas for visual audit
+        const dummyCanvas = document.createElement("canvas");
+        dummyCanvas.width = 120; dummyCanvas.height = 120;
+        const dCtx = dummyCanvas.getContext("2d");
+        dCtx.fillStyle = item.type === "pepper" ? "#7f1d1d" : "#78350f";
+        dCtx.fillRect(0, 0, 120, 120);
+        dCtx.beginPath();
+        dCtx.arc(60, 60, 30, 0, Math.PI * 2);
+        dCtx.fillStyle = item.type === "pepper" ? "#ef4444" : "#f59e0b";
+        dCtx.fill();
+
+        executeSort(item.type, item.conf, dummyCanvas);
+      }, 2200);
+    }
+
+    async function handleManualUpload(e) {
+      await loadModel();
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const img = new Image();
+      img.onload = async () => {
+        const container = document.getElementById("webcam-canvas-container");
+        container.innerHTML = "";
+        container.appendChild(img);
+
+        const t0 = performance.now();
+        const predictions = await model.predict(img);
+        const latency = Math.round(performance.now() - t0);
+        document.getElementById("telemetry-latency").innerText = `${latency} ms`;
+
+        // Direct test upload: presence guaranteed, triggers immediate sort
+        processInference(predictions, img, {
+          present: true,
+          coveragePct: 18.5,
+          isMoved: false,
+          isPhotometricSeed: true,
+          isGreenBackground: false,
+          isBright: false,
+          isSkin: false,
+          warming: false,
+          avgDiff: 45
+        });
+      };
+      img.src = URL.createObjectURL(file);
+    }
+  </script>
+</body>
+</html>
