@@ -774,17 +774,43 @@
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.5/dist/teachablemachine-image.min.js"></script>
 
+  <!-- Phase A: Pure decision engine (validateModel, classifyPrediction, SortLatch) -->
+  <script src="./decision_engine.js"></script>
+
   <script>
     const MODEL_PATH = "./";
     let model, webcam, isCameraActive = false;
     let counts = { pepper: 0, papaya: 0 };
     let threshold = 0.90; // 90% default Satake threshold
+    let marginThreshold = 0.20; // Minimum lead over runner-up class (Phase A)
     let isPaused = false;
     let audioEnabled = true;
     let lastActionTimestamp = 0;
     let sortingHistory = [];
     let audioCtx = null;
     let zoomLevel = 1.0; // Default 1.0x Full Frame (matches Teachable Machine training field of view)
+
+    // ── Phase A: Model-readiness flag ────────────────────────────────────────
+    // modelReady=true ONLY when model loaded AND label validation passed.
+    // Neither inspectionLoop nor executeSort may proceed when this is false.
+    let modelReady = false;
+    let modelLabels = [];        // Actual labels reported by the loaded model
+    let modelClassCount = 0;     // Actual output unit count
+
+    // ── Phase A: Per-insertion SortLatch (multi-frame confirmation + latch) ──
+    // CONFIRM_FRAMES: consecutive qualifying frames before a physical sort fires.
+    // REARM_EMPTY_FRAMES: consecutive stable-empty frames required to rearm.
+    const CONFIRM_FRAMES     = 5;
+    const REARM_EMPTY_FRAMES = 10;
+    let _sortLatch = null; // Initialized after DOMContentLoaded / first camera start
+    function getSortLatch() {
+      if (!_sortLatch) _sortLatch = new SortLatch({ confirmFrames: CONFIRM_FRAMES, rearmEmptyFrames: REARM_EMPTY_FRAMES });
+      return _sortLatch;
+    }
+
+    // ── Phase A: Loop re-entrancy guard ──────────────────────────────────────
+    // Prevents overlapping async inspectionLoop calls if predict() takes > 1 frame.
+    let _inferenceInFlight = false;
 
     // Hardware-Grade Optical Presence Gate (Google Coral & Buhler SORTEX Architecture)
     let opticalGateEnabled = true;
@@ -1097,28 +1123,63 @@
 
     async function loadModel() {
       if (window.location.protocol === "file:") {
-        alert("⚠️ CORS Error: Browsers block loading AI model files directly via file://\n\nPlease run this in PowerShell:\ncd 'c:\\Users\\M S I\\Downloads\\tm-my-image-model'\npython -m http.server 8000\n\nThen open: http://localhost:8000");
-        document.getElementById("model-status").innerText = "CORS ERROR (USE HTTP)";
-        document.getElementById("model-status").style.color = "var(--pepper)";
+        alert("⚠️ CORS Error: Browsers block loading AI model files directly via file://\n\nPlease run this in PowerShell:\ncd into the project folder, then:\npython -m http.server 8000\n\nThen open: http://localhost:8000");
+        _setModelStatus("CORS ERROR (USE HTTP)", "var(--pepper)");
         return;
       }
 
-      if (!model) {
-        document.getElementById("model-status").innerText = "LOADING MODEL...";
-        try {
-          model = await tmImage.load(MODEL_PATH + "model.json", MODEL_PATH + "metadata.json");
-          document.getElementById("model-status").innerText = "PERCEPTION ACTIVE";
-        } catch (err) {
-          console.error("Model load error:", err);
-          document.getElementById("model-status").innerText = "MODEL LOAD FAILED";
-          document.getElementById("model-status").style.color = "var(--pepper)";
-          alert("Error loading model files: " + (err.message || err));
+      // Already successfully loaded and validated
+      if (modelReady) return;
+
+      _setModelStatus("LOADING MODEL...", "var(--text-muted)");
+      try {
+        const loaded = await tmImage.load(MODEL_PATH + "model.json", MODEL_PATH + "metadata.json");
+
+        // ── Phase A: Validate that the model exposes the required class labels ──
+        const validation = validateModel(loaded);
+        if (!validation.ok) {
+          console.error("[Phase A] Model validation failed:", validation.reason);
+          _setModelStatus("MODEL INVALID — " + validation.reason.slice(0, 40), "var(--pepper)");
+          alert("⚠️ Model validation failed:\n" + validation.reason +
+                "\n\nSorting is DISABLED until a valid model is loaded.");
+          // Do NOT set model or modelReady — inference cannot proceed
+          return;
         }
+
+        model          = loaded;
+        modelReady     = true;
+        modelLabels    = validation.labels;
+        modelClassCount = validation.classCount;
+
+        const labelStr = modelLabels.join(" / ");
+        console.log(`[Phase A] Model loaded OK. Classes (${modelClassCount}): [${labelStr}]`);
+        _setModelStatus(`PERCEPTION ACTIVE • ${modelClassCount} classes: ${labelStr}`, "var(--emerald)");
+      } catch (err) {
+        console.error("Model load error:", err);
+        model      = null;
+        modelReady = false;
+        _setModelStatus("MODEL LOAD FAILED — " + (err.message || String(err)).slice(0, 50), "var(--pepper)");
+        alert("Error loading model files: " + (err.message || err) +
+              "\n\nSorting is DISABLED. Check the browser console for details.");
       }
+    }
+
+    function _setModelStatus(text, color) {
+      const el = document.getElementById("model-status");
+      if (!el) return;
+      el.innerText = text;
+      el.style.color = color || "";
     }
 
     async function startCamera() {
       await loadModel();
+
+      // ── Phase A: Do not start camera loop if model failed to load/validate ──
+      if (!modelReady) {
+        alert("⚠️ Camera cannot start: model is not ready.\nCheck the model status badge and browser console.");
+        return;
+      }
+
       if (isCameraActive) return;
       initAudio();
 
@@ -1139,6 +1200,10 @@
         btn.classList.add("btn-cyan");
         isCameraActive = true;
 
+        // Reset latch state on every fresh camera start
+        getSortLatch().reset();
+        _inferenceInFlight = false;
+
         window.requestAnimationFrame(inspectionLoop);
       } catch (err) {
         alert("Camera access denied or unavailable.");
@@ -1150,27 +1215,41 @@
     let frameCount = 0, lastFpsTime = performance.now();
     async function inspectionLoop() {
       if (!isCameraActive) return;
+
+      // ── Phase A: Hard guard — never run inference when model is not ready ──
+      if (!modelReady || !model) {
+        window.requestAnimationFrame(inspectionLoop);
+        return;
+      }
+
       webcam.update();
 
       const t0 = performance.now();
-      if (!isPaused) {
-        let inputTarget = webcam.canvas;
-        if (zoomLevel > 1.0) {
-          const cropSize = 380 / zoomLevel;
-          const sx = (380 - cropSize) / 2;
-          const sy = (380 - cropSize) / 2;
-          macroCtx.drawImage(webcam.canvas, sx, sy, cropSize, cropSize, 0, 0, 224, 224);
-          inputTarget = macroCanvas;
+      if (!isPaused && !_inferenceInFlight) {
+        _inferenceInFlight = true;
+        try {
+          let inputTarget = webcam.canvas;
+          if (zoomLevel > 1.0) {
+            const cropSize = 380 / zoomLevel;
+            const sx = (380 - cropSize) / 2;
+            const sy = (380 - cropSize) / 2;
+            macroCtx.drawImage(webcam.canvas, sx, sy, cropSize, cropSize, 0, 0, 224, 224);
+            inputTarget = macroCanvas;
+          }
+
+          // Hardware-Grade Presence Analysis (Google Coral is_good_photo pattern)
+          const presence = analyzePresence(webcam.canvas);
+
+          const predictions = await model.predict(inputTarget);
+          const latency = Math.round(performance.now() - t0);
+          document.getElementById("telemetry-latency").innerText = `${latency} ms`;
+
+          processInference(predictions, inputTarget, presence);
+        } catch (err) {
+          console.error("[inspectionLoop] predict error:", err);
+        } finally {
+          _inferenceInFlight = false;
         }
-
-        // Hardware-Grade Presence Analysis (Google Coral is_good_photo pattern)
-        const presence = analyzePresence(webcam.canvas);
-
-        const predictions = await model.predict(inputTarget);
-        const latency = Math.round(performance.now() - t0);
-        document.getElementById("telemetry-latency").innerText = `${latency} ms`;
-
-        processInference(predictions, inputTarget, presence);
       }
 
       frameCount++;
@@ -1184,61 +1263,69 @@
       window.requestAnimationFrame(inspectionLoop);
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // processInference() — Phase A refactored
+    //
+    // Layer structure:
+    //  1. UI updates (confidence bars, telemetry text) — always happen
+    //  2. Optical gate checks (inhibit for motion, skin, paper, green, empty)
+    //  3. classifyPrediction() — pure decision function from decision_engine.js
+    //  4. SortLatch.update() — multi-frame confirmation + per-insertion latch
+    //  5. executeSort() — only called when latch fires AND gate is active
+    //
+    // CRITICAL SAFETY RULES enforced here:
+    //  • Gate disabled → never call executeSort() / sendSerialCommand()
+    //  • Model not ready → never reach this function (inspectionLoop guards)
+    //  • Single frame is never enough: latch requires CONFIRM_FRAMES consecutive
+    //  • One sort per insertion: latch blocks until REARM_EMPTY_FRAMES stable empties
+    // ─────────────────────────────────────────────────────────────────────────
     function processInference(predictions, sourceCanvas, presence = null) {
       if (!presence) {
         presence = {
-          present: true,
-          coveragePct: 15.0,
+          present: false,
+          coveragePct: 0.0,
           isMoved: false,
-          isPhotometricSeed: true,
+          isPhotometricSeed: false,
           isGreenBackground: false,
           isBright: false,
           isSkin: false,
           warming: false,
-          avgDiff: 30
+          avgDiff: 0
         };
       }
+
       // During warmup, don't process or display anything
       if (presence.warming) return;
 
-      const covVal = (presence && typeof presence.coveragePct === "number") ? presence.coveragePct : 0.0;
-      let pepperProb = 0, papayaProb = 0, backgroundProb = 0;
-      let hasBgClass = false;
-      for (let p of predictions) {
-        const name = p.className.toLowerCase();
-        if (name.includes("pepper")) pepperProb = p.probability;
-        else if (name.includes("papaya")) papayaProb = p.probability;
-        else if (name.includes("background") || name.includes("empty") || name.includes("none") || name.includes("idle")) {
-          backgroundProb = p.probability;
-          hasBgClass = true;
-        }
+      // ── Phase A: Safety guard — should not reach here without a ready model,
+      // but check defensively in case of unexpected call paths.
+      if (!modelReady || !model) {
+        console.warn("[processInference] Called with model not ready — suppressed.");
+        return;
       }
 
-      // In a 2-class model (pepper/papaya), background clearance is driven by the optical presence gate:
-      if (!hasBgClass) {
-        backgroundProb = presence.present ? 0.0 : 1.0;
-      }
+      // ── UI: Parse probabilities for display (always show, even if inhibited) ──
+      const covVal = (typeof presence.coveragePct === "number") ? presence.coveragePct : 0.0;
+      const parsed = parsePredictions(predictions);
 
-      // Update Bilateral Confidence Bar: only show seed confidence when a valid seed is present in reticle
-      const dispPepper = (presence.present || !opticalGateEnabled) ? pepperProb : 0;
-      const dispPapaya = (presence.present || !opticalGateEnabled) ? papayaProb : 0;
+      const dispPepper = (presence.present || !opticalGateEnabled) ? parsed.pepperProb : 0;
+      const dispPapaya = (presence.present || !opticalGateEnabled) ? parsed.papayaProb : 0;
       document.getElementById("pct-pepper").innerText = (dispPepper * 100).toFixed(1) + "%";
       document.getElementById("pct-papaya").innerText = (dispPapaya * 100).toFixed(1) + "%";
       document.getElementById("bar-pepper").style.width = (dispPepper * 100) + "%";
       document.getElementById("bar-papaya").style.width = (dispPapaya * 100) + "%";
 
-      // Update Background Clearance Meter
-      const bgEl = document.getElementById("pct-background");
+      // Background clearance indicator
+      let displayBgProb = parsed.hasBgClass ? parsed.backgroundProb : (presence.present ? 0.0 : 1.0);
+      const bgEl  = document.getElementById("pct-background");
       const bgDot = document.getElementById("bg-indicator-dot");
-      if (bgEl) bgEl.innerText = (backgroundProb * 100).toFixed(1) + "%";
-      if (bgDot) {
-        bgDot.style.background = backgroundProb > 0.4 ? "var(--emerald)" : "#64748b";
-      }
+      if (bgEl)  bgEl.innerText = (displayBgProb * 100).toFixed(1) + "%";
+      if (bgDot) bgDot.style.background = displayBgProb > 0.4 ? "var(--emerald)" : "#64748b";
 
-      // Optical Reticle & Telemetry Feedback
-      const reticle = document.getElementById("optical-reticle");
+      // ── Gate telemetry HUD ──
+      const reticle      = document.getElementById("optical-reticle");
       const gateTelemetry = document.getElementById("optical-gate-telemetry");
-      const focalState = document.getElementById("focal-state");
+      const focalState   = document.getElementById("focal-state");
 
       if (gateTelemetry) {
         if (presence.warming) {
@@ -1265,105 +1352,150 @@
         }
       }
 
-      // STAGE 1: Physical Motion / Relocation Guard
+      // ── STAGE 1: Physical Motion / Relocation Guard ──
       if (opticalGateEnabled && presence.isMoved) {
         if (reticle) reticle.classList.remove("reticle-active");
-        if (focalState) {
-          focalState.innerText = "CAMERA RELOCATED • AUTO-ZEROING...";
-          focalState.style.color = "var(--amber)";
-        }
-        return; // Absolute inhibit when camera is moving or pointed elsewhere!
+        if (focalState) { focalState.innerText = "CAMERA RELOCATED • AUTO-ZEROING..."; focalState.style.color = "var(--amber)"; }
+        getSortLatch().update("invalid", false, true); // reset confirmation counter
+        return;
       }
 
-      // STAGE 2: Rejection of Non-Seed Objects (Rolled Paper, Hands, Mousepad)
+      // ── STAGE 2: Rejection of Non-Seed Objects ──
       if (opticalGateEnabled && presence.isBright) {
         if (reticle) reticle.classList.remove("reticle-active");
-        if (focalState) {
-          focalState.innerText = "REJECTED: BRIGHT NON-SEED (ROLLED PAPER/GLARE)";
-          focalState.style.color = "var(--amber)";
-        }
+        if (focalState) { focalState.innerText = "REJECTED: BRIGHT NON-SEED (ROLLED PAPER/GLARE)"; focalState.style.color = "var(--amber)"; }
+        getSortLatch().update("invalid", false, true);
         return;
       }
-
       if (opticalGateEnabled && presence.isSkin) {
         if (reticle) reticle.classList.remove("reticle-active");
-        if (focalState) {
-          focalState.innerText = "REJECTED: HAND / SKIN DETECTED";
-          focalState.style.color = "var(--amber)";
-        }
+        if (focalState) { focalState.innerText = "REJECTED: HAND / SKIN DETECTED"; focalState.style.color = "var(--amber)"; }
+        getSortLatch().update("invalid", false, true);
         return;
       }
-
       if (opticalGateEnabled && presence.isGreenBackground) {
         if (reticle) reticle.classList.remove("reticle-active");
-        if (focalState) {
-          focalState.innerText = "REJECTED: GREEN BACKGROUND SURFACE";
-          focalState.style.color = "var(--amber)";
-        }
+        if (focalState) { focalState.innerText = "REJECTED: GREEN BACKGROUND SURFACE"; focalState.style.color = "var(--amber)"; }
+        getSortLatch().update("invalid", false, true);
         return;
       }
 
-      // STAGE 3: Empty Chamber Inhibit
+      // ── STAGE 3: Empty Chamber (gate enabled) ──
       if (opticalGateEnabled && !presence.present) {
         if (reticle) reticle.classList.remove("reticle-active");
-        if (focalState) {
-          focalState.innerText = "CHAMBER EMPTY (OPTICAL GATE LOCKED)";
-          focalState.style.color = "var(--text-muted)";
-        }
-        return; // Absolute inhibit when no seed is physically in reticle!
+        if (focalState) { focalState.innerText = "CHAMBER EMPTY (OPTICAL GATE LOCKED)"; focalState.style.color = "var(--text-muted)"; }
+        // presenceClean=true signals the latch that the chamber is genuinely empty
+        getSortLatch().update("uncertain", /*presenceClean=*/true, true);
+        return;
+      }
+
+      // ── Gate disabled indicator ──
+      if (!opticalGateEnabled && focalState) {
+        focalState.innerText = "⚠️ GATE DISABLED — LIVE SORT INHIBITED";
+        focalState.style.color = "var(--amber)";
       }
 
       if (reticle) reticle.classList.add("reticle-active");
 
-      // STAGE 4: AI Model 3rd Class Background Clearance (when model includes a background class)
-      if (hasBgClass && backgroundProb > 0.35) {
-        if (focalState) {
-          focalState.innerText = "BACKGROUND DOMINANT (IDLE)";
-          focalState.style.color = "var(--emerald)";
-        }
+      // ── STAGE 4: classifyPrediction() — pure decision (no side effects) ──
+      const cls = classifyPrediction(predictions, { threshold, margin: marginThreshold });
+
+      // Background class dominant (when model has a 3rd class)
+      if (cls.decision === "background") {
+        if (focalState) { focalState.innerText = "BACKGROUND DOMINANT (IDLE)"; focalState.style.color = "var(--emerald)"; }
+        getSortLatch().update("uncertain", false, true);
         return;
       }
 
-      // STAGE 5: Strict Dominance Margin Gating
-      const now = Date.now();
-      const canActuate = (now - lastActionTimestamp >= 2000);
+      // Invalid prediction (malformed, non-finite, missing labels)
+      if (cls.decision === "invalid") {
+        if (focalState) { focalState.innerText = `PREDICTION INVALID: ${cls.reason}`; focalState.style.color = "var(--amber)"; }
+        getSortLatch().update("invalid", false, true);
+        return;
+      }
 
-      if (pepperProb >= threshold && pepperProb > papayaProb) {
-        if (focalState) {
-          focalState.innerText = `TARGET: PEPPER DETECTED (${(pepperProb * 100).toFixed(0)}%)`;
-          focalState.style.color = "var(--pepper)";
+      // Uncertain / ambiguous
+      if (cls.decision === "uncertain") {
+        if (focalState) { focalState.innerText = `AMBIGUOUS (${(cls.pepperProb*100).toFixed(0)}% P / ${(cls.papayaProb*100).toFixed(0)}% Pa)`; focalState.style.color = "var(--amber)"; }
+        getSortLatch().update("uncertain", false, true);
+        return;
+      }
+
+      // ── STAGE 5: SortLatch — multi-frame confirmation + per-insertion guard ──
+      // presenceClean is false here: a seed IS present (not genuinely empty)
+      const latchResult = getSortLatch().update(cls.decision, /*presenceClean=*/false, opticalGateEnabled);
+
+      // Update focal state to show accumulation progress
+      const confirmSoFar = latchResult.confirmCount;
+      if (latchResult.latched && latchResult.action === null) {
+        // Latched — waiting for rearm
+        if (focalState) { focalState.innerText = `SORTED ✓ — WAITING CHAMBER CLEAR (${latchResult.emptyFrameCount}/${REARM_EMPTY_FRAMES})`; focalState.style.color = "var(--text-muted)"; }
+      } else if (latchResult.action === null && cls.decision !== "uncertain") {
+        // Confirming — show progress
+        const pct = (cls.decision === "pepper") ? cls.pepperProb : cls.papayaProb;
+        if (focalState) { focalState.innerText = `${cls.decision.toUpperCase()} CONFIRMING… (${confirmSoFar}/${CONFIRM_FRAMES}) @ ${(pct*100).toFixed(0)}%`; focalState.style.color = cls.decision === "pepper" ? "var(--pepper)" : "var(--papaya)"; }
+      }
+
+      // ── STAGE 6: Actuation ──
+      // Only fire if: latch just released an action AND the optical gate is enabled.
+      // Gate-disabled path is explicitly blocked here to prevent hardware movement.
+      if (latchResult.action) {
+        if (!opticalGateEnabled) {
+          // Gate is off — log and display, but NEVER call executeSort / sendSerialCommand
+          console.warn("[Phase A] Sort inhibited: optical gate is disabled. Enable gate for live sorting.");
+          if (focalState) { focalState.innerText = `⚠️ GATE OFF — ${latchResult.action.toUpperCase()} NOT ACTUATED`; focalState.style.color = "var(--amber)"; }
+          return;
         }
-        if (canActuate) {
-          executeSort("pepper", pepperProb, sourceCanvas);
-        }
-      } else if (papayaProb >= threshold && papayaProb > pepperProb) {
-        if (focalState) {
-          focalState.innerText = `TARGET: PAPAYA DETECTED (${(papayaProb * 100).toFixed(0)}%)`;
-          focalState.style.color = "var(--papaya)";
-        }
-        if (canActuate) {
-          executeSort("papaya", papayaProb, sourceCanvas);
-        }
-      } else {
-        if (focalState) {
-          focalState.innerText = "AMBIGUOUS TARGET TRANSIT";
-          focalState.style.color = "var(--amber)";
+        // Standard 2-second debounce (belt-and-suspenders on top of the latch)
+        const nowMs = Date.now();
+        if (nowMs - lastActionTimestamp >= 2000) {
+          executeSort(latchResult.action, (latchResult.action === "pepper" ? cls.pepperProb : cls.papayaProb), sourceCanvas, /*isSimulation=*/false);
         }
       }
     }
 
-    function executeSort(type, confidence, sourceCanvas) {
+    // ─────────────────────────────────────────────────────────────────────────
+    // executeSort() — Phase A patched
+    //
+    // @param {string}  type          – 'pepper' | 'papaya'
+    // @param {number}  confidence    – Winning probability (0–1)
+    // @param {*}       sourceCanvas  – Canvas or image element for audit thumb
+    // @param {boolean} isSimulation  – TRUE for Flight Test / demo mode.
+    //                                  When true: animations run, counts increment
+    //                                  SIMULATED counters, but NO serial command
+    //                                  is sent regardless of Arduino connection.
+    // ─────────────────────────────────────────────────────────────────────────
+    function executeSort(type, confidence, sourceCanvas, isSimulation = false) {
       lastActionTimestamp = Date.now();
-      counts[type]++;
+
+      // ── Phase A: Simulation guard ──
+      // Flight test and any non-live call MUST pass isSimulation=true.
+      // The serial command is the ONLY path to physical hardware; it is blocked here.
+      if (!isSimulation) {
+        counts[type]++;
+      }
+      // (Simulated sorts do NOT increment the real counts)
+
       playSolenoidSound(type === "pepper" ? 520 : 680);
 
-      // Transmit to Arduino Microcontroller over WebSerial @ 9600 Baud
-      sendSerialCommand(type === "pepper" ? "1" : "2");
+      // ── Phase A: Hardware actuation guard ──
+      // Serial command only when:
+      //   • Not a simulation
+      //   • Optical gate is enabled (additional check — processInference already guards this)
+      if (!isSimulation && opticalGateEnabled) {
+        // Transmit to Arduino Microcontroller over WebSerial @ 9600 Baud
+        sendSerialCommand(type === "pepper" ? "1" : "2");
+      } else if (isSimulation) {
+        console.log(`[Flight Test / Simulation] SIMULATED sort: ${type} — serial command suppressed.`);
+      } else {
+        console.warn(`[Phase A] Serial suppressed: gate disabled. type=${type}`);
+      }
 
       // 1. Actuation Splash
       const banner = document.getElementById("splash-banner");
       banner.className = `actuation-splash splash-active-${type}`;
-      banner.innerHTML = `ACTUATING SOLENOID: ${type === 'pepper' ? '🌶️ PEPPER' : '🥭 PAPAYA'} (${(confidence * 100).toFixed(1)}%)`;
+      const simLabel = isSimulation ? " [SIM]" : "";
+      banner.innerHTML = `${isSimulation ? "🎮 SIMULATED" : "ACTUATING SOLENOID"}: ${type === 'pepper' ? '🌶️ PEPPER' : '🥭 PAPAYA'}${simLabel} (${(confidence * 100).toFixed(1)}%)`;
 
       // 2. Diverter Flap & Servo Dial
       const flap = document.getElementById("diverter-flap");
@@ -1384,7 +1516,10 @@
         binPapaya.classList.add("active-papaya");
         binPepper.classList.remove("active-pepper");
       }
-      document.getElementById(`tally-${type}`).innerText = counts[type];
+      // Show real count for live sorts; do not update real tally during simulation
+      if (!isSimulation) {
+        document.getElementById(`tally-${type}`).innerText = counts[type];
+      }
 
       // 5. Canvas Particle Drop Physics
       triggerParticlePhysics(type);
@@ -1503,9 +1638,19 @@
     renderPhysics();
 
     // Flight Simulator (Automated Demo Mode)
+    // ── Phase A: All calls to executeSort() pass isSimulation=TRUE ──
+    // This guarantees that even if an Arduino is connected, no serial command
+    // is transmitted during a flight test. Animations and UI still play.
     async function triggerFlightTest() {
       await loadModel();
       initAudio();
+
+      // Show clear simulation notice in the banner
+      const banner = document.getElementById("splash-banner");
+      if (banner) {
+        banner.className = "actuation-splash";
+        banner.innerText = "⚡ FLIGHT TEST RUNNING — SIMULATION ONLY (No hardware actuation)";
+      }
 
       const mockSeeds = [
         { type: "pepper", conf: 0.96 },
@@ -1521,7 +1666,7 @@
           return;
         }
         const item = mockSeeds[idx++];
-        
+
         // Mock a crop canvas for visual audit
         const dummyCanvas = document.createElement("canvas");
         dummyCanvas.width = 120; dummyCanvas.height = 120;
@@ -1533,14 +1678,31 @@
         dCtx.fillStyle = item.type === "pepper" ? "#ef4444" : "#f59e0b";
         dCtx.fill();
 
-        executeSort(item.type, item.conf, dummyCanvas);
+        // isSimulation=true — NEVER sends a serial command, even if Arduino is connected
+        executeSort(item.type, item.conf, dummyCanvas, /*isSimulation=*/true);
       }, 2200);
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // handleManualUpload() — Phase A: PREDICTION-ONLY mode
+    //
+    // Manual image uploads display prediction results but NEVER:
+    //   • Increment sorting counts
+    //   • Send serial commands to Arduino
+    //   • Call executeSort()
+    //   • Modify the SortLatch state
+    //
+    // This function calls displayUploadResult() instead of processInference().
+    // ─────────────────────────────────────────────────────────────────────────
     async function handleManualUpload(e) {
-      await loadModel();
       const file = e.target.files[0];
       if (!file) return;
+
+      await loadModel();
+      if (!modelReady || !model) {
+        alert("⚠️ Model is not ready. Cannot classify uploaded image.");
+        return;
+      }
 
       const img = new Image();
       img.onload = async () => {
@@ -1549,24 +1711,52 @@
         container.appendChild(img);
 
         const t0 = performance.now();
-        const predictions = await model.predict(img);
+        let predictions;
+        try {
+          predictions = await model.predict(img);
+        } catch (err) {
+          console.error("Upload prediction error:", err);
+          alert("Prediction failed: " + (err.message || err));
+          return;
+        }
         const latency = Math.round(performance.now() - t0);
         document.getElementById("telemetry-latency").innerText = `${latency} ms`;
 
-        // Direct test upload: presence guaranteed, triggers immediate sort
-        processInference(predictions, img, {
-          present: true,
-          coveragePct: 18.5,
-          isMoved: false,
-          isPhotometricSeed: true,
-          isGreenBackground: false,
-          isBright: false,
-          isSkin: false,
-          warming: false,
-          avgDiff: 45
-        });
+        // ── PREDICTION ONLY — no actuation, no serial, no count change ──
+        displayUploadResult(predictions);
       };
       img.src = URL.createObjectURL(file);
+    }
+
+    // Display upload prediction results without any hardware side-effects
+    function displayUploadResult(predictions) {
+      const cls = classifyPrediction(predictions, { threshold, margin: marginThreshold });
+
+      // Update confidence bars (same as live view)
+      document.getElementById("pct-pepper").innerText  = (cls.pepperProb * 100).toFixed(1) + "%";
+      document.getElementById("pct-papaya").innerText  = (cls.papayaProb * 100).toFixed(1) + "%";
+      document.getElementById("bar-pepper").style.width = (cls.pepperProb * 100) + "%";
+      document.getElementById("bar-papaya").style.width = (cls.papayaProb * 100) + "%";
+
+      // Update focal state to show prediction and explicit PREDICTION-ONLY warning
+      const focalState = document.getElementById("focal-state");
+      if (focalState) {
+        if (cls.decision === "pepper" || cls.decision === "papaya") {
+          focalState.innerText = `📁 UPLOAD PREDICTION: ${cls.decision.toUpperCase()} ${((cls.decision === 'pepper' ? cls.pepperProb : cls.papayaProb) * 100).toFixed(1)}% — PREDICTION ONLY, NO SORT`;
+        } else if (cls.decision === "invalid") {
+          focalState.innerText = `📁 UPLOAD: INVALID PREDICTION — ${cls.reason}`;
+        } else {
+          focalState.innerText = `📁 UPLOAD PREDICTION: UNCERTAIN (${(cls.pepperProb*100).toFixed(0)}% P / ${(cls.papayaProb*100).toFixed(0)}% Pa) — NO SORT`;
+        }
+        focalState.style.color = "var(--text-muted)";
+      }
+
+      // Update splash banner with a clear PREDICTION ONLY notice
+      const banner = document.getElementById("splash-banner");
+      if (banner) {
+        banner.className = "actuation-splash";
+        banner.innerHTML = `📁 UPLOAD PREDICTION ONLY — NO HARDWARE ACTUATION<br><small style="font-size:0.75rem">${cls.decision.toUpperCase()}: Pepper ${(cls.pepperProb*100).toFixed(1)}% / Papaya ${(cls.papayaProb*100).toFixed(1)}%</small>`;
+      }
     }
   </script>
 </body>
