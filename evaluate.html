@@ -1,0 +1,1055 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Model Evaluation & Held-Out Benchmark — Agri-Vision Sorter</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #0a0f1d;
+      --bg-card: #111827;
+      --bg-card-sub: #1e293b;
+      --border: #334155;
+      --border-light: #475569;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --cyan: #06b6d4;
+      --cyan-glow: rgba(6, 182, 212, 0.2);
+      --emerald: #10b981;
+      --emerald-glow: rgba(16, 185, 129, 0.2);
+      --amber: #f59e0b;
+      --amber-glow: rgba(245, 158, 11, 0.2);
+      --rose: #f43f5e;
+      --rose-glow: rgba(244, 63, 94, 0.2);
+      --purple: #a855f7;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg-dark);
+      color: var(--text);
+      font-family: 'Inter', system-ui, sans-serif;
+      min-height: 100vh;
+      padding: 2rem 1.5rem;
+    }
+
+    .container {
+      max-width: 1280px;
+      margin: 0 auto;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 2rem;
+    }
+
+    .title-group h1 {
+      font-size: 1.6rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .badge-phase {
+      font-size: 0.75rem;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 0.25rem 0.6rem;
+      border-radius: 9999px;
+      background: rgba(168, 85, 247, 0.15);
+      color: var(--purple);
+      border: 1px solid rgba(168, 85, 247, 0.4);
+    }
+    .title-group p {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      margin-top: 0.25rem;
+    }
+
+    .nav-link {
+      color: var(--cyan);
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.5rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      transition: all 0.2s;
+    }
+    .nav-link:hover {
+      background: var(--bg-card-sub);
+      border-color: var(--cyan);
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    @media (max-width: 900px) {
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+    }
+    .card-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+      color: #e2e8f0;
+    }
+
+    /* Model Selector */
+    .model-controls {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .radio-group {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .radio-label {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.88rem;
+      cursor: pointer;
+    }
+    .input-text {
+      width: 100%;
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 0.6rem 0.8rem;
+      border-radius: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+    }
+    .btn {
+      background: var(--cyan);
+      color: #000;
+      font-weight: 700;
+      font-size: 0.88rem;
+      padding: 0.65rem 1.2rem;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      transition: all 0.2s;
+    }
+    .btn:hover:not(:disabled) {
+      opacity: 0.9;
+      transform: translateY(-1px);
+    }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .btn-secondary {
+      background: var(--bg-card-sub);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover:not(:disabled) {
+      border-color: var(--cyan);
+    }
+
+    .model-status-box {
+      margin-top: 1rem;
+      padding: 0.75rem 1rem;
+      background: var(--bg-dark);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      font-size: 0.85rem;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* Drop Zone / Directory Selection */
+    .drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: 8px;
+      padding: 2rem 1.5rem;
+      text-align: center;
+      background: rgba(15, 23, 42, 0.4);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .drop-zone:hover, .drop-zone.dragover {
+      border-color: var(--cyan);
+      background: rgba(6, 182, 212, 0.05);
+    }
+    .drop-zone input[type="file"] { display: none; }
+    .drop-icon { font-size: 2rem; margin-bottom: 0.5rem; }
+    .drop-text { font-size: 0.95rem; font-weight: 600; }
+    .drop-sub { font-size: 0.8rem; color: var(--text-muted); margin-top: 0.25rem; }
+
+    /* Policy Sliders */
+    .slider-group {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1.25rem;
+      margin-top: 1rem;
+    }
+    .slider-item label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-bottom: 0.4rem;
+    }
+    .slider-item span {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      color: var(--cyan);
+    }
+    .slider-item input[type="range"] {
+      width: 100%;
+      accent-color: var(--cyan);
+    }
+
+    /* Progress & Status */
+    .progress-bar-container {
+      width: 100%;
+      height: 8px;
+      background: var(--bg-dark);
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 1rem 0 0.5rem 0;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--cyan), var(--emerald));
+      transition: width 0.1s ease;
+    }
+
+    /* KPI Summary Cards */
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .kpi-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      text-align: center;
+    }
+    .kpi-val {
+      font-size: 1.6rem;
+      font-weight: 800;
+      font-family: 'JetBrains Mono', monospace;
+      margin: 0.25rem 0;
+    }
+    .kpi-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 600;
+    }
+    .val-cyan { color: var(--cyan); }
+    .val-emerald { color: var(--emerald); }
+    .val-amber { color: var(--amber); }
+    .val-rose { color: var(--rose); }
+
+    /* Confusion Matrix Table */
+    .matrix-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.88rem;
+      margin-top: 1rem;
+    }
+    .matrix-table th, .matrix-table td {
+      border: 1px solid var(--border);
+      padding: 0.75rem 1rem;
+      text-align: center;
+    }
+    .matrix-table th {
+      background: var(--bg-card-sub);
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 0.78rem;
+    }
+    .matrix-diag {
+      background: rgba(16, 185, 129, 0.12);
+      color: var(--emerald);
+      font-weight: 700;
+    }
+    .matrix-err {
+      background: rgba(244, 63, 94, 0.1);
+      color: var(--rose);
+      font-weight: 600;
+    }
+    .matrix-row-hdr {
+      background: var(--bg-card-sub);
+      text-align: left;
+      font-weight: 600;
+      color: #e2e8f0;
+    }
+
+    /* Per-class Metrics Table */
+    .perf-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+      margin-top: 1rem;
+    }
+    .perf-table th, .perf-table td {
+      border: 1px solid var(--border);
+      padding: 0.6rem 0.9rem;
+      text-align: left;
+    }
+    .perf-table th {
+      background: var(--bg-card-sub);
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 0.78rem;
+    }
+    .perf-table td:not(:first-child) {
+      text-align: right;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* Notice box */
+    .notice-box {
+      background: rgba(245, 158, 11, 0.1);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      border-radius: 8px;
+      padding: 0.8rem 1rem;
+      font-size: 0.85rem;
+      color: #fde68a;
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.6rem;
+    }
+
+    /* Image Gallery */
+    .gallery-controls {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 1.5rem;
+      margin-bottom: 0.75rem;
+    }
+    .gallery-filter {
+      display: flex;
+      gap: 0.5rem;
+    }
+    .filter-btn {
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 0.35rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .filter-btn.active {
+      background: var(--cyan);
+      color: #000;
+      border-color: var(--cyan);
+    }
+    .image-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 1rem;
+      max-height: 520px;
+      overflow-y: auto;
+      padding-right: 0.5rem;
+    }
+    .img-card {
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .img-card img {
+      width: 100%;
+      height: 120px;
+      object-fit: cover;
+      background: #000;
+    }
+    .img-meta {
+      padding: 0.6rem;
+      font-size: 0.72rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .badge-correct { background: rgba(16, 185, 129, 0.2); color: var(--emerald); }
+    .badge-wrong   { background: rgba(244, 63, 94, 0.2); color: var(--rose); }
+    .badge-reject  { background: rgba(245, 158, 11, 0.2); color: var(--amber); }
+
+    .prob-bar {
+      height: 4px;
+      background: #334155;
+      border-radius: 2px;
+      overflow: hidden;
+      margin-top: 2px;
+    }
+    .prob-bar-fill {
+      height: 100%;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <div class="title-group">
+      <h1>
+        <span>🧪 Model Evaluation Bench</span>
+        <span class="badge-phase">PHASE B READY</span>
+      </h1>
+      <p>Evaluate genuine 3-class & 2-class models on held-out test and validation images with zero actuation side effects</p>
+    </div>
+    <a href="index.html" class="nav-link">
+      <span>⬅ Return to Sorter Dashboard</span>
+    </a>
+  </header>
+
+  <!-- Step 1: Model & Dataset Setup -->
+  <div class="grid-2">
+    <!-- Model Selector -->
+    <div class="card">
+      <div class="card-title">1️⃣ Load Model Under Test</div>
+      <div class="model-controls">
+        <div class="radio-group">
+          <label class="radio-label">
+            <input type="radio" name="model-src" value="active" checked onchange="onModelSrcChange()">
+            Active Production (./)
+          </label>
+          <label class="radio-label">
+            <input type="radio" name="model-src" value="candidate" onchange="onModelSrcChange()">
+            Candidate Model (./candidate_model/)
+          </label>
+          <label class="radio-label">
+            <input type="radio" name="model-src" value="custom" onchange="onModelSrcChange()">
+            Custom Path
+          </label>
+        </div>
+
+        <input type="text" id="custom-path-input" class="input-text" style="display: none;" value="./candidate_model/" placeholder="e.g. ./candidate_model/">
+
+        <button class="btn" id="btn-load-model" onclick="loadEvaluationModel()">
+          <span>⚡ Initialize & Validate Model</span>
+        </button>
+
+        <div class="model-status-box" id="model-status-text">
+          Model: Not loaded. Click above to load.
+        </div>
+      </div>
+    </div>
+
+    <!-- Held-Out Dataset Directory Selector -->
+    <div class="card">
+      <div class="card-title">2️⃣ Select Held-Out Images</div>
+      <div class="drop-zone" id="drop-zone" onclick="document.getElementById('dir-input').click()">
+        <input type="file" id="dir-input" webkitdirectory directory multiple onchange="handleDirectorySelect(event)">
+        <div class="drop-icon">📁</div>
+        <div class="drop-text" id="drop-text-primary">Click to Select Dataset Directory</div>
+        <div class="drop-sub" id="drop-text-sub">Select <code>data/phase_b/test</code> or <code>data/phase_b/validation</code></div>
+      </div>
+
+      <div style="margin-top: 1rem; display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-size: 0.85rem; color: var(--text-muted);" id="file-manifest-count">0 images staged</span>
+        <button class="btn btn-secondary" id="btn-run-eval" disabled onclick="runEvaluation()">
+          <span>▶ Run Evaluation</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 2: Policy Thresholds (Interactive Tuning) -->
+  <div class="card" style="margin-bottom: 1.5rem;">
+    <div class="card-title" style="justify-content: space-between;">
+      <span>3️⃣ Decision Engine Policy Thresholds</span>
+      <button class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.35rem 0.7rem;" onclick="recomputePolicyMetrics()">
+        🔄 Recompute Policy Metrics
+      </button>
+    </div>
+    <div class="slider-group">
+      <div class="slider-item">
+        <label>
+          <span>Winning Threshold</span>
+          <span id="lbl-thresh">90%</span>
+        </label>
+        <input type="range" id="sl-thresh" min="50" max="98" value="90" oninput="updateSliders()">
+      </div>
+      <div class="slider-item">
+        <label>
+          <span>Winning Margin</span>
+          <span id="lbl-margin">20%</span>
+        </label>
+        <input type="range" id="sl-margin" min="0" max="50" value="20" oninput="updateSliders()">
+      </div>
+      <div class="slider-item">
+        <label>
+          <span>Background Gate</span>
+          <span id="lbl-bg">35%</span>
+        </label>
+        <input type="range" id="sl-bg" min="10" max="70" value="35" oninput="updateSliders()">
+      </div>
+    </div>
+  </div>
+
+  <!-- Progress Bar -->
+  <div class="progress-bar-container" id="progress-container" style="display: none;">
+    <div class="progress-bar-fill" id="progress-fill"></div>
+  </div>
+  <div style="display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1.5rem;" id="progress-text"></div>
+
+  <!-- Sample Size Notice (Shows if dataset < 90) -->
+  <div class="notice-box" id="sample-notice" style="display: none;">
+    <span>⚠️</span>
+    <div>
+      <strong>Preliminary Benchmark Notice:</strong>
+      <span id="sample-notice-msg">Evaluation dataset size is small. Accuracy and metrics should be considered preliminary until confirmed on ≥ 100 images per class.</span>
+    </div>
+  </div>
+
+  <!-- Step 3: Executive Metrics Dashboard -->
+  <div class="kpi-row" id="kpi-section" style="display: none;">
+    <div class="kpi-card">
+      <div class="kpi-label">Tested Support</div>
+      <div class="kpi-val val-cyan" id="kpi-support">0</div>
+      <div style="font-size: 0.7rem; color: var(--text-muted);">Held-out images</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Overall Accuracy</div>
+      <div class="kpi-val val-emerald" id="kpi-accuracy">0.0%</div>
+      <div style="font-size: 0.7rem; color: var(--text-muted);">Exact policy matches</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Background FAR</div>
+      <div class="kpi-val val-rose" id="kpi-far">0.0%</div>
+      <div style="font-size: 0.7rem; color: var(--text-muted);">False accepts on negatives</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Pepper F1-Score</div>
+      <div class="kpi-val val-amber" id="kpi-f1-pepper">0.00</div>
+      <div style="font-size: 0.7rem; color: var(--text-muted);">Harmonic mean</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Papaya F1-Score</div>
+      <div class="kpi-val val-amber" id="kpi-f1-papaya">0.00</div>
+      <div style="font-size: 0.7rem; color: var(--text-muted);">Harmonic mean</div>
+    </div>
+  </div>
+
+  <!-- 3x3 Confusion Matrix & Per-Class Performance Table -->
+  <div class="grid-2" id="tables-section" style="display: none;">
+    <!-- Confusion Matrix -->
+    <div class="card">
+      <div class="card-title">📊 3 × 3 Policy Confusion Matrix</div>
+      <p style="font-size: 0.78rem; color: var(--text-muted);">Rows = Ground Truth Label | Columns = Decision Engine Output</p>
+      <table class="matrix-table">
+        <thead>
+          <tr>
+            <th>Actual \ Predicted</th>
+            <th>Pepper</th>
+            <th>Papaya</th>
+            <th>Rejected / Idle</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="matrix-row-hdr">🌶️ pepper_seed</td>
+            <td id="m-0-0" class="matrix-diag">0</td>
+            <td id="m-0-1" class="matrix-err">0</td>
+            <td id="m-0-2" class="matrix-err">0</td>
+          </tr>
+          <tr>
+            <td class="matrix-row-hdr">🥭 papaya_seed</td>
+            <td id="m-1-0" class="matrix-err">0</td>
+            <td id="m-1-1" class="matrix-diag">0</td>
+            <td id="m-1-2" class="matrix-err">0</td>
+          </tr>
+          <tr>
+            <td class="matrix-row-hdr">🛡️ other_background</td>
+            <td id="m-2-0" class="matrix-err">0</td>
+            <td id="m-2-1" class="matrix-err">0</td>
+            <td id="m-2-2" class="matrix-diag">0</td>
+          </tr>
+        </tbody>
+      </table>
+      <div style="margin-top: 0.75rem; font-size: 0.75rem; color: var(--text-muted);" id="matrix-notes">
+        Policy: Confidence ≥ <span id="note-thresh">90%</span>, Margin ≥ <span id="note-margin">20%</span>.
+      </div>
+    </div>
+
+    <!-- Per-Class Metrics -->
+    <div class="card">
+      <div class="card-title">📈 Per-Class Classification Report</div>
+      <table class="perf-table">
+        <thead>
+          <tr>
+            <th>Class</th>
+            <th>Support</th>
+            <th>TP</th>
+            <th>FP</th>
+            <th>FN</th>
+            <th>Precision</th>
+            <th>Recall</th>
+            <th>F1</th>
+          </tr>
+        </thead>
+        <tbody id="perf-tbody">
+          <!-- Populated dynamically -->
+        </tbody>
+      </table>
+
+      <div style="margin-top: 1rem; font-size: 0.78rem; color: var(--text-muted); line-height: 1.5;">
+        <div>• <strong>Pepper False Accepts:</strong> <span id="txt-fa-pepper" style="color:var(--rose)">0</span> | <strong>Rejections:</strong> <span id="txt-fr-pepper">0</span></div>
+        <div>• <strong>Papaya False Accepts:</strong> <span id="txt-fa-papaya" style="color:var(--rose)">0</span> | <strong>Rejections:</strong> <span id="txt-fr-papaya">0</span></div>
+        <div>• <strong>Negative Leakage (FAR):</strong> <span id="txt-neg-leak" style="color:var(--rose)">0</span> out of <span id="txt-neg-total">0</span> negatives accepted as seed.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Image-Level Prediction Audit Gallery -->
+  <div class="card" id="gallery-card" style="display: none;">
+    <div class="gallery-controls">
+      <div class="card-title" style="margin-bottom: 0;">🖼️ Image-Level Prediction Audit</div>
+      <div class="gallery-filter">
+        <button class="filter-btn active" onclick="setGalleryFilter('all', this)">All (<span id="cnt-flt-all">0</span>)</button>
+        <button class="filter-btn" onclick="setGalleryFilter('errors', this)">Errors / False Accepts (<span id="cnt-flt-err">0</span>)</button>
+        <button class="filter-btn" onclick="setGalleryFilter('pepper', this)">Pepper (<span id="cnt-flt-pep">0</span>)</button>
+        <button class="filter-btn" onclick="setGalleryFilter('papaya', this)">Papaya (<span id="cnt-flt-pap">0</span>)</button>
+        <button class="filter-btn" onclick="setGalleryFilter('background', this)">Negative / Bg (<span id="cnt-flt-bg">0</span>)</button>
+      </div>
+    </div>
+
+    <div class="image-grid" id="image-grid">
+      <!-- Image cards populated dynamically -->
+    </div>
+  </div>
+
+</div>
+
+<!-- Pinned TensorFlow.js & Teachable Machine Libraries -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.5/dist/teachablemachine-image.min.js"></script>
+
+<!-- Pure Decision Engine (Shared Production Logic) -->
+<script src="./decision_engine.js"></script>
+
+<script>
+  let evalModel = null;
+  let modelInfo = null;
+  let stagedFiles = [];      // Array of { file, actualClass, path }
+  let evaluationResults = []; // Array of cached raw predictions & classification
+  let currentFilter = 'all';
+
+  function onModelSrcChange() {
+    const src = document.querySelector('input[name="model-src"]:checked').value;
+    const customInput = document.getElementById('custom-path-input');
+    customInput.style.display = (src === 'custom') ? 'block' : 'none';
+  }
+
+  function getModelPath() {
+    const src = document.querySelector('input[name="model-src"]:checked').value;
+    if (src === 'active') return './';
+    if (src === 'candidate') return './candidate_model/';
+    return document.getElementById('custom-path-input').value.trim();
+  }
+
+  async function loadEvaluationModel() {
+    const btn = document.getElementById('btn-load-model');
+    const statusBox = document.getElementById('model-status-text');
+    const modelPath = getModelPath();
+
+    btn.disabled = true;
+    btn.innerText = 'Loading Model...';
+    statusBox.innerText = `Connecting to: ${modelPath}model.json ...`;
+
+    try {
+      const loaded = await tmImage.load(modelPath + 'model.json', modelPath + 'metadata.json');
+      const validation = validateModel(loaded);
+
+      if (!validation.ok) {
+        statusBox.innerText = `❌ VALIDATION FAILED: ${validation.reason}`;
+        statusBox.style.color = 'var(--rose)';
+        evalModel = null;
+        return;
+      }
+
+      evalModel = loaded;
+      modelInfo = validation;
+
+      const classType = validation.isThreeClass ? '3-CLASS (Genuine Phase B)' : '2-CLASS (Phase A Legacy)';
+      statusBox.innerHTML = `✅ <strong>MODEL READY:</strong> ${classType}<br>` +
+                            `Units: ${validation.classCount} | Labels: [${validation.labels.join(', ')}]`;
+      statusBox.style.color = 'var(--emerald)';
+
+      checkReadyToRun();
+    } catch (err) {
+      console.error('Model load error:', err);
+      statusBox.innerText = `❌ LOAD FAILED: ${err.message || err}`;
+      statusBox.style.color = 'var(--rose)';
+      evalModel = null;
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<span>⚡ Initialize & Validate Model</span>';
+    }
+  }
+
+  function handleDirectorySelect(e) {
+    const files = Array.from(e.target.files);
+    parseStagedFiles(files);
+  }
+
+  function parseStagedFiles(files) {
+    const SUPPORTED = ['.jpg', '.jpeg', '.png', '.webp', '.bmp'];
+    stagedFiles = [];
+
+    const counts = { pepper_seed: 0, papaya_seed: 0, other_background: 0, unassigned: 0 };
+
+    for (const f of files) {
+      const name = f.name.toLowerCase();
+      const isImg = SUPPORTED.some(ext => name.endsWith(ext));
+      if (!isImg) continue;
+
+      const relPath = (f.webkitRelativePath || f.name).toLowerCase();
+
+      let actualClass = null;
+      if (relPath.includes('pepper')) {
+        actualClass = 'pepper_seed';
+      } else if (relPath.includes('papaya')) {
+        actualClass = 'papaya_seed';
+      } else if (relPath.includes('background') || relPath.includes('other') || relPath.includes('empty')) {
+        actualClass = 'other_background';
+      } else {
+        actualClass = 'unassigned';
+      }
+
+      counts[actualClass]++;
+      stagedFiles.push({ file: f, actualClass, path: f.webkitRelativePath || f.name });
+    }
+
+    const total = stagedFiles.length;
+    document.getElementById('file-manifest-count').innerText = `${total} images ready (${counts.pepper_seed} Pep / ${counts.papaya_seed} Pap / ${counts.other_background} Neg)`;
+    document.getElementById('drop-text-primary').innerText = `✓ Staged ${total} images`;
+    document.getElementById('drop-text-sub').innerText = `Pepper: ${counts.pepper_seed} | Papaya: ${counts.papaya_seed} | Negatives: ${counts.other_background}`;
+
+    checkReadyToRun();
+  }
+
+  function checkReadyToRun() {
+    const btn = document.getElementById('btn-run-eval');
+    btn.disabled = !(evalModel && stagedFiles.length > 0);
+  }
+
+  function updateSliders() {
+    const t = document.getElementById('sl-thresh').value;
+    const m = document.getElementById('sl-margin').value;
+    const b = document.getElementById('sl-bg').value;
+
+    document.getElementById('lbl-thresh').innerText = t + '%';
+    document.getElementById('lbl-margin').innerText = m + '%';
+    document.getElementById('lbl-bg').innerText = b + '%';
+
+    document.getElementById('note-thresh').innerText = t + '%';
+    document.getElementById('note-margin').innerText = m + '%';
+
+    if (evaluationResults.length > 0) {
+      recomputePolicyMetrics();
+    }
+  }
+
+  async function runEvaluation() {
+    if (!evalModel || stagedFiles.length === 0) return;
+
+    const btn = document.getElementById('btn-run-eval');
+    btn.disabled = true;
+
+    const progressContainer = document.getElementById('progress-container');
+    const progressFill = document.getElementById('progress-fill');
+    const progressText = document.getElementById('progress-text');
+
+    progressContainer.style.display = 'block';
+    progressFill.style.width = '0%';
+
+    evaluationResults = [];
+    const t0 = performance.now();
+
+    for (let i = 0; i < stagedFiles.length; i++) {
+      const item = stagedFiles[i];
+      const img = await loadImageFromFile(item.file);
+
+      // Raw inference
+      const predictions = await evalModel.predict(img);
+
+      // Cache raw result
+      evaluationResults.push({
+        item,
+        predictions,
+        imgUrl: img.src
+      });
+
+      const pct = Math.round(((i + 1) / stagedFiles.length) * 100);
+      progressFill.style.width = pct + '%';
+      progressText.innerText = `Evaluated ${i + 1}/${stagedFiles.length} images (${pct}%)`;
+    }
+
+    const elapsed = Math.round(performance.now() - t0);
+    const avgLatency = (elapsed / stagedFiles.length).toFixed(1);
+    progressText.innerText = `Completed in ${(elapsed/1000).toFixed(1)}s (avg ${avgLatency} ms/image)`;
+
+    recomputePolicyMetrics();
+    btn.disabled = false;
+  }
+
+  function loadImageFromFile(file) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.src = URL.createObjectURL(file);
+    });
+  }
+
+  function recomputePolicyMetrics() {
+    if (evaluationResults.length === 0) return;
+
+    const threshold   = parseFloat(document.getElementById('sl-thresh').value) / 100;
+    const margin      = parseFloat(document.getElementById('sl-margin').value) / 100;
+    const bgThreshold = parseFloat(document.getElementById('sl-bg').value) / 100;
+
+    // Confusion Matrix: [Actual][Predicted]
+    // 0: pepper_seed, 1: papaya_seed, 2: other_background
+    // Predicted: 0=pepper, 1=papaya, 2=rejected/idle
+    const matrix = [
+      [0, 0, 0],
+      [0, 0, 0],
+      [0, 0, 0]
+    ];
+
+    const support = { pepper_seed: 0, papaya_seed: 0, other_background: 0 };
+    let correct = 0;
+    let falseAcceptBackground = 0;
+    let falseAcceptPepper = 0;
+    let falseAcceptPapaya = 0;
+    let falseRejectPepper = 0;
+    let falseRejectPapaya = 0;
+
+    for (const r of evaluationResults) {
+      const cls = classifyPrediction(r.predictions, { threshold, margin, bgThreshold });
+      r.decision = cls.decision;
+      r.parsedProbs = cls;
+
+      const act = r.item.actualClass;
+      if (support[act] !== undefined) support[act]++;
+
+      let actIdx = (act === 'pepper_seed') ? 0 : (act === 'papaya_seed' ? 1 : 2);
+      let predIdx = 2; // default: rejected / uncertain / background
+
+      if (cls.decision === 'pepper') predIdx = 0;
+      else if (cls.decision === 'papaya') predIdx = 1;
+      else predIdx = 2; // background, uncertain, or invalid
+
+      matrix[actIdx][predIdx]++;
+
+      // Accuracy check
+      if ((act === 'pepper_seed' && cls.decision === 'pepper') ||
+          (act === 'papaya_seed' && cls.decision === 'papaya') ||
+          (act === 'other_background' && (cls.decision === 'background' || cls.decision === 'uncertain'))) {
+        correct++;
+        r.isSuccess = true;
+      } else {
+        r.isSuccess = false;
+      }
+
+      // Specific False Acceptances & Rejections
+      if (act === 'other_background' && (cls.decision === 'pepper' || cls.decision === 'papaya')) {
+        falseAcceptBackground++;
+      }
+      if (act !== 'pepper_seed' && cls.decision === 'pepper') falseAcceptPepper++;
+      if (act === 'pepper_seed' && cls.decision !== 'pepper') falseRejectPepper++;
+      if (act !== 'papaya_seed' && cls.decision === 'papaya') falseAcceptPapaya++;
+      if (act === 'papaya_seed' && cls.decision !== 'papaya') falseRejectPapaya++;
+    }
+
+    const total = evaluationResults.length;
+    const accPct = ((correct / total) * 100).toFixed(1);
+    const bgSupport = support.other_background || 0;
+    const farPct = bgSupport > 0 ? ((falseAcceptBackground / bgSupport) * 100).toFixed(1) : '0.0';
+
+    // Update KPI Cards
+    document.getElementById('kpi-section').style.display = 'grid';
+    document.getElementById('tables-section').style.display = 'grid';
+    document.getElementById('gallery-card').style.display = 'block';
+
+    document.getElementById('kpi-support').innerText = total;
+    document.getElementById('kpi-accuracy').innerText = accPct + '%';
+    document.getElementById('kpi-far').innerText = farPct + '%';
+
+    // Sample size warning
+    const noticeEl = document.getElementById('sample-notice');
+    if (total < 90) {
+      noticeEl.style.display = 'flex';
+      document.getElementById('sample-notice-msg').innerText =
+        `Evaluation dataset has only ${total} images (recommended ≥ 30 per class for validation, ≥ 100 for final test). Results are PRELIMINARY.`;
+    } else {
+      noticeEl.style.display = 'none';
+    }
+
+    // Populate Matrix Table
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 3; c++) {
+        document.getElementById(`m-${r}-${c}`).innerText = matrix[r][c];
+      }
+    }
+
+    // Per-class stats (Precision, Recall, F1)
+    // Class 0: Pepper, Class 1: Papaya, Class 2: Background
+    const classes = [
+      { name: 'Pepper Seed', actIdx: 0, predIdx: 0, supp: support.pepper_seed },
+      { name: 'Papaya Seed', actIdx: 1, predIdx: 1, supp: support.papaya_seed },
+      { name: 'Other / Background', actIdx: 2, predIdx: 2, supp: support.other_background }
+    ];
+
+    let tbody = '';
+    classes.forEach(c => {
+      const tp = matrix[c.actIdx][c.predIdx];
+      let fp = 0;
+      for (let r = 0; r < 3; r++) if (r !== c.actIdx) fp += matrix[r][c.predIdx];
+      let fn = 0;
+      for (let col = 0; col < 3; col++) if (col !== c.predIdx) fn += matrix[c.actIdx][col];
+
+      const prec = (tp + fp) > 0 ? (tp / (tp + fp)) : 0;
+      const rec  = (tp + fn) > 0 ? (tp / (tp + fn)) : 0;
+      const f1   = (prec + rec) > 0 ? (2 * prec * rec / (prec + rec)) : 0;
+
+      if (c.actIdx === 0) document.getElementById('kpi-f1-pepper').innerText = f1.toFixed(2);
+      if (c.actIdx === 1) document.getElementById('kpi-f1-papaya').innerText = f1.toFixed(2);
+
+      tbody += `<tr>
+        <td><strong>${c.name}</strong></td>
+        <td>${c.supp}</td>
+        <td>${tp}</td>
+        <td>${fp}</td>
+        <td>${fn}</td>
+        <td>${(prec * 100).toFixed(1)}%</td>
+        <td>${(rec * 100).toFixed(1)}%</td>
+        <td><strong>${f1.toFixed(2)}</strong></td>
+      </tr>`;
+    });
+    document.getElementById('perf-tbody').innerHTML = tbody;
+
+    document.getElementById('txt-fa-pepper').innerText = falseAcceptPepper;
+    document.getElementById('txt-fr-pepper').innerText = falseRejectPepper;
+    document.getElementById('txt-fa-papaya').innerText = falseAcceptPapaya;
+    document.getElementById('txt-fr-papaya').innerText = falseRejectPapaya;
+    document.getElementById('txt-neg-leak').innerText = falseAcceptBackground;
+    document.getElementById('txt-neg-total').innerText = bgSupport;
+
+    renderGallery();
+  }
+
+  function setGalleryFilter(filter, btn) {
+    currentFilter = filter;
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    renderGallery();
+  }
+
+  function renderGallery() {
+    const grid = document.getElementById('image-grid');
+    grid.innerHTML = '';
+
+    let cntAll = evaluationResults.length;
+    let cntErr = 0;
+    let cntPep = 0;
+    let cntPap = 0;
+    let cntBg = 0;
+
+    for (const r of evaluationResults) {
+      if (!r.isSuccess) cntErr++;
+      if (r.item.actualClass === 'pepper_seed') cntPep++;
+      if (r.item.actualClass === 'papaya_seed') cntPap++;
+      if (r.item.actualClass === 'other_background') cntBg++;
+
+      // Filter check
+      if (currentFilter === 'errors' && r.isSuccess) continue;
+      if (currentFilter === 'pepper' && r.item.actualClass !== 'pepper_seed') continue;
+      if (currentFilter === 'papaya' && r.item.actualClass !== 'papaya_seed') continue;
+      if (currentFilter === 'background' && r.item.actualClass !== 'other_background') continue;
+
+      const card = document.createElement('div');
+      card.className = 'img-card';
+
+      const pCls = r.decision;
+      const isSuccess = r.isSuccess;
+      const badgeCls = isSuccess ? 'badge-correct' : (pCls === 'uncertain' || pCls === 'background' ? 'badge-reject' : 'badge-wrong');
+
+      const p = r.parsedProbs;
+      card.innerHTML = `
+        <img src="${r.imgUrl}" alt="${r.item.path}">
+        <div class="img-meta">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span class="badge ${badgeCls}">${pCls.toUpperCase()}</span>
+            <span style="color:var(--text-muted); font-size:0.65rem;">${r.item.actualClass.replace('_seed','')}</span>
+          </div>
+          <div style="font-size:0.68rem; margin-top:0.25rem;">
+            P: ${(p.pepperProb*100).toFixed(0)}% | Pa: ${(p.papayaProb*100).toFixed(0)}% ${p.hasBgClass ? `| Bg: ${(p.backgroundProb*100).toFixed(0)}%` : ''}
+          </div>
+          <div class="prob-bar">
+            <div class="prob-bar-fill" style="width:${(p.pepperProb*100)}%; background:var(--rose);"></div>
+          </div>
+          <div class="prob-bar">
+            <div class="prob-bar-fill" style="width:${(p.papayaProb*100)}%; background:var(--amber);"></div>
+          </div>
+        </div>
+      `;
+      grid.appendChild(card);
+    }
+
+    document.getElementById('cnt-flt-all').innerText = cntAll;
+    document.getElementById('cnt-flt-err').innerText = cntErr;
+    document.getElementById('cnt-flt-pep').innerText = cntPep;
+    document.getElementById('cnt-flt-pap').innerText = cntPap;
+    document.getElementById('cnt-flt-bg').innerText = cntBg;
+  }
+</script>
+
+</body>
+</html>
